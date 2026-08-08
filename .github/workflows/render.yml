@@ -1,0 +1,55 @@
+name: render
+
+# Manual for now; the schedule switches on once a few runs have been watched.
+# A cron that publishes to live storage should not be enabled and walked away
+# from on its first day.
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Force a product instead of choosing by sun elevation
+        type: choice
+        options: [auto, day, night]
+        default: auto
+      dry_run:
+        description: Render without publishing
+        type: boolean
+        default: false
+
+concurrency:
+  # Cycles must never overlap: two jobs writing meta.json at once could leave
+  # the pointer naming frames the other one pruned.
+  group: render
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Render and publish
+        env:
+          S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+        run: |
+          ARGS=""
+          case "${{ inputs.force }}" in
+            day)   ARGS="--force-day" ;;
+            night) ARGS="--force-night" ;;
+          esac
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            python render.py $ARGS
+          else
+            python render.py $ARGS --publish
+          fi
