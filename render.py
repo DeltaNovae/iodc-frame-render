@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import logging
 import os
 import sys
@@ -27,7 +28,7 @@ from datetime import datetime, timezone
 
 from PIL import Image
 
-from iodc import overlays, products, wms
+from iodc import overlays, products, publish, storage, wms
 from iodc.fetch import fetch_frame
 from iodc.views import VIEWS
 
@@ -94,24 +95,82 @@ def _fetch_with_fallback(caps: bytes, product: products.Product, view, before=No
         return fetch_frame(fallback.layer, view, dim, before=before), fallback
 
 
+def encode(image) -> bytes:
+    buf = io.BytesIO()
+    image.save(buf, "JPEG", quality=JPEG_QUALITY, subsampling=JPEG_SUBSAMPLING,
+               optimize=True)
+    return buf.getvalue()
+
+
+def publish_cycle(result: dict, client, target: publish.Target) -> dict:
+    """Upload frames, then the pointer, then prune — in that order.
+
+    The order is the whole design. Frames go up under immutable keys, so they
+    are invisible until something names them. `meta.json` is written next and
+    is what makes the cycle visible, atomically. Only then are expired frames
+    removed, so a reader holding the previous meta always finds its objects.
+    """
+    previous = publish.read_meta(client, target)
+    history = publish.history_from_meta(previous)
+
+    entries = {}
+    for view_key, langs in result["views"].items():
+        for lang, payload in langs.items():
+            captured_at = payload["captured_at"]
+            key = publish.frame_key(target.prefix, view_key, lang, captured_at)
+            body = encode(payload["image"])
+            client.put(key, body, publish.CONTENT_TYPE, publish.FRAME_CACHE_CONTROL)
+            log.info("  put %-42s %3d KB", key, len(body) // 1024)
+            entries[(view_key, lang)] = captured_at
+
+    meta = publish.build_meta(target.prefix, result["product"], entries, history)
+    client.put(publish.meta_key(target.prefix),
+               json.dumps(meta, indent=2).encode("utf-8"),
+               "application/json", publish.META_CACHE_CONTROL)
+    log.info("  put %-42s (now visible)", publish.meta_key(target.prefix))
+
+    merged = publish.history_from_meta(meta)
+    for key in publish.prunable(history | merged, target.prefix):
+        if key not in {v["latest"] for v in meta["views"].values()}:
+            client.delete(key)
+            log.info("  pruned %s", key)
+    return meta
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--at", help="ISO8601 UTC instant; defaults to now")
     ap.add_argument("--force-night", action="store_const", const="night", dest="force")
     ap.add_argument("--force-day", action="store_const", const="day", dest="force")
+    ap.add_argument("--publish", action="store_true",
+                    help="upload to object storage (needs S3_* in the environment)")
+    ap.add_argument("--dry-run", metavar="DIR",
+                    help="publish into a local directory instead — same code path")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     when = wms.parse_iso(args.at) if args.at else datetime.now(timezone.utc)
 
     result = render_cycle(when, args.force, pinned=bool(args.at))
+
+    if args.publish or args.dry_run:
+        if args.dry_run:
+            client = storage.LocalClient(args.dry_run)
+            target = publish.Target("local", "local", "", "", os.environ.get("S3_PREFIX", "sat"))
+        else:
+            target = publish.Target.from_env()
+            client = storage.S3Client(target.endpoint, target.bucket,
+                                      target.access_key, target.secret_key)
+        publish_cycle(result, client, target)
+        return 0
+
     os.makedirs(OUT_DIR, exist_ok=True)
     for view_key, langs in result["views"].items():
         for lang, payload in langs.items():
             name = f"{view_key}-{lang}.jpg"
             path = os.path.join(OUT_DIR, name)
-            payload["image"].save(path, "JPEG", quality=JPEG_QUALITY,
-                                  subsampling=JPEG_SUBSAMPLING, optimize=True)
+            with open(path, "wb") as fh:
+                fh.write(encode(payload["image"]))
             log.info("  %-14s %3d KB  %s  captured %s", name,
                      os.path.getsize(path) // 1024, payload["layer"],
                      wms.format_iso(payload["captured_at"]))
