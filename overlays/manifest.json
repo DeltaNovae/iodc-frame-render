@@ -1,0 +1,140 @@
+{
+  "overlays": [
+    {
+      "file": "wide-bn.png",
+      "view": "wide",
+      "lang": "bn",
+      "density": "ceiling",
+      "night": false,
+      "bbox": [
+        10,
+        80,
+        28,
+        100
+      ],
+      "size": [
+        889,
+        800
+      ]
+    },
+    {
+      "file": "wide-bn-night.png",
+      "view": "wide",
+      "lang": "bn",
+      "density": "ceiling",
+      "night": true,
+      "bbox": [
+        10,
+        80,
+        28,
+        100
+      ],
+      "size": [
+        889,
+        800
+      ]
+    },
+    {
+      "file": "wide-en.png",
+      "view": "wide",
+      "lang": "en",
+      "density": "ceiling",
+      "night": false,
+      "bbox": [
+        10,
+        80,
+        28,
+        100
+      ],
+      "size": [
+        889,
+        800
+      ]
+    },
+    {
+      "file": "wide-en-night.png",
+      "view": "wide",
+      "lang": "en",
+      "density": "ceiling",
+      "night": true,
+      "bbox": [
+        10,
+        80,
+        28,
+        100
+      ],
+      "size": [
+        889,
+        800
+      ]
+    },
+    {
+      "file": "close-bn.png",
+      "view": "close",
+      "lang": "bn",
+      "density": "ceiling",
+      "night": false,
+      "bbox": [
+        19,
+        86,
+        28,
+        95
+      ],
+      "size": [
+        800,
+        800
+      ]
+    },
+    {
+      "file": "close-bn-night.png",
+      "view": "close",
+      "lang": "bn",
+      "density": "ceiling",
+      "night": true,
+      "bbox": [
+        19,
+        86,
+        28,
+        95
+      ],
+      "size": [
+        800,
+        800
+      ]
+    },
+    {
+      "file": "close-en.png",
+      "view": "close",
+      "lang": "en",
+      "density": "ceiling",
+      "night": false,
+      "bbox": [
+        19,
+        86,
+        28,
+        95
+      ],
+      "size": [
+        800,
+        800
+      ]
+    },
+    {
+      "file": "close-en-night.png",
+      "view": "close",
+      "lang": "en",
+      "density": "ceiling",
+      "night": true,
+      "bbox": [
+        19,
+        86,
+        28,
+        95
+      ],
+      "size": [
+        800,
+        800
+      ]
+    }
+  ]
+}

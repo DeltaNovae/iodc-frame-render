@@ -35,10 +35,14 @@ class Frame:
 
 
 def fetch_frame(layer: str, view, time_dim: wms.TimeDimension,
-                ladder: int = DEFAULT_LADDER, getter=wms.http_get) -> Frame:
-    """Fetch and validate one view of one product. Raises if every slot fails."""
+                ladder: int = DEFAULT_LADDER, getter=wms.http_get,
+                before=None) -> Frame:
+    """Fetch and validate one view of one product. Raises if every slot fails.
+
+    ``before`` starts the ladder at a given moment rather than the newest slot.
+    """
     failures = []
-    for when in time_dim.slots_desc(ladder):
+    for when in time_dim.slots_desc(ladder, before=before):
         url = wms.build_getmap_url(layer, view, when)
         try:
             raw = getter(url)

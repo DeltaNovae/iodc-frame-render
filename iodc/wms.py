@@ -15,6 +15,7 @@ Why the TIME dimension is handled explicitly rather than left to the server:
 
 from __future__ import annotations
 
+import math
 import time as _time
 import urllib.error
 import urllib.request
@@ -92,9 +93,20 @@ class TimeDimension:
         """
         return min(self.default, self.end)
 
-    def slots_desc(self, count: int) -> list:
-        """The newest ``count`` slots, newest first — the retry ladder."""
+    def slots_desc(self, count: int, before: datetime | None = None) -> list:
+        """``count`` slots, newest first — the retry ladder.
+
+        ``before`` starts the ladder at a chosen moment instead of the newest
+        slot, snapped down to the advertised grid. Production always wants the
+        newest frame; this exists for rendering a specific past moment, which
+        is the only way to exercise the daylight branch after dark.
+        """
         newest = self.latest
+        if before is not None:
+            elapsed = (before - self.start).total_seconds()
+            step_seconds = self.step.total_seconds()
+            snapped = self.start + self.step * math.floor(elapsed / step_seconds)
+            newest = min(snapped, newest)
         return [newest - (self.step * i) for i in range(count)]
 
 

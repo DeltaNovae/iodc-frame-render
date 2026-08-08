@@ -72,6 +72,24 @@ def test_slot_ladder_steps_backwards_by_one_step():
     ]
 
 
+def test_ladder_can_start_from_a_chosen_moment_snapped_to_the_grid():
+    """Rendering a specific past instant is the only way to exercise the
+    daylight branch after dark, so the ladder must be able to start there."""
+    dim = wms.parse_time_dimension(CAPS, "ir108")
+    slots = dim.slots_desc(3, before=datetime(2026, 8, 8, 7, 7, tzinfo=timezone.utc))
+    assert slots == [
+        datetime(2026, 8, 8, 7, 0, tzinfo=timezone.utc),    # snapped down
+        datetime(2026, 8, 8, 6, 45, tzinfo=timezone.utc),
+        datetime(2026, 8, 8, 6, 30, tzinfo=timezone.utc),
+    ]
+
+
+def test_a_future_moment_cannot_ask_for_a_slot_that_does_not_exist_yet():
+    dim = wms.parse_time_dimension(CAPS, "ir108")
+    slots = dim.slots_desc(1, before=datetime(2030, 1, 1, tzinfo=timezone.utc))
+    assert slots == [dim.latest]
+
+
 def test_missing_layer_and_missing_dimension_are_distinct_errors():
     with pytest.raises(ValueError, match="not found"):
         wms.parse_time_dimension(CAPS, "does_not_exist")

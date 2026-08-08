@@ -20,15 +20,13 @@ import sys
 
 from PIL import Image
 
-from iodc import wms
+from iodc import overlays, wms
 from iodc.fetch import fetch_frame
-from iodc.validate import FrameInvalid
 from iodc.views import CLOSE, WIDE
 
 IR = "ir108"                     # 24 h product
 VISIBLE = "rgb_naturalenhncd"    # daylight only, by nature
 
-OVERLAY = os.path.join("overlays", "selftest-wide.png")
 OUT = "selftest-out.jpg"
 
 logging.basicConfig(level=logging.INFO, format="   %(message)s")
@@ -59,17 +57,23 @@ def main() -> int:
     except RuntimeError as exc:
         print(f"   rejected as expected: {str(exc).split('|')[0].strip()}")
 
-    print("\n4. compositing the overlay onto the wide frame ...")
+    print("\n4. checking every overlay matches the frame it covers ...")
+    for view in (WIDE, CLOSE):
+        for lang in overlays.languages():
+            for night in (False, True):
+                overlays.load(view, lang, night)
+    print(f"   all {len(overlays.languages()) * 4} overlays verified against their bboxes")
+
+    print("\n5. compositing the overlay onto the wide frame ...")
     import io
     frame = Image.open(io.BytesIO(frames["wide"].raw)).convert("RGB")
-    overlay = Image.open(OVERLAY).convert("RGBA")
-    if overlay.size != frame.size:
-        raise SystemExit(f"FAIL: overlay {overlay.size} != frame {frame.size}")
+    overlay = overlays.load(WIDE, "bn", night=True)
     frame.paste(overlay, (0, 0), overlay)
     frame.save(OUT, "JPEG", quality=82, optimize=True)
     print(f"   wrote {OUT} ({os.path.getsize(OUT) // 1024} KB)")
 
-    print("\nPASS — capabilities, slot pinning, validation and compositing all work.")
+    print("\nPASS — capabilities, slot pinning, validation, overlay checks and "
+          "compositing all work.")
     return 0
 
 
