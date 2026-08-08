@@ -1,9 +1,13 @@
 name: render
 
-# Manual for now; the schedule switches on once a few runs have been watched.
-# A cron that publishes to live storage should not be enabled and walked away
-# from on its first day.
 on:
+  # Every 15 minutes, matching the upstream capture cadence. Actions schedules
+  # are best-effort and drift under load, which is fine here: frames carry their
+  # own capture time, so a late run publishes a correctly-labelled frame rather
+  # than a wrong one. Missed slots are simply skipped — the next run picks up
+  # whatever is newest.
+  schedule:
+    - cron: '*/15 * * * *'
   workflow_dispatch:
     inputs:
       force:
@@ -53,6 +57,10 @@ jobs:
           else
             python render.py $ARGS --publish
           fi
+        # A single failed cycle is not an incident: the previous frames keep
+        # serving, and the next run is 15 minutes away. Sustained failure is
+        # what matters, and staleness is how it is detected.
+        continue-on-error: true
 
       # Publishing without error is not the same as the result being usable:
       # read it back the way a client would.

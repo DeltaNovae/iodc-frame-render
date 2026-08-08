@@ -1,0 +1,102 @@
+name: staleness
+
+# The render job failing is not, by itself, an incident: the previous frames
+# keep serving and the next cycle is 15 minutes away. What matters is sustained
+# failure — and that is invisible from the outside, because a dead pipeline
+# still serves its last good frames and looks entirely healthy.
+#
+# The age of the newest capture is the only honest signal, so it gets its own
+# workflow rather than living inside the job whose death it is meant to detect.
+
+on:
+  schedule:
+    - cron: '20 * * * *'      # hourly, offset off the render cadence
+  workflow_dispatch:
+    inputs:
+      max_age_minutes:
+        description: Age at which frames count as stale
+        default: '120'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  staleness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Check what is live
+        id: check
+        env:
+          S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+        run: |
+          python verify.py --max-age-minutes "${{ inputs.max_age_minutes || 120 }}" \
+            | tee check.txt
+
+      - name: Open or update the tracking issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const title = 'Published frames are stale';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            let detail = '_check output unavailable — see the workflow logs._';
+            try { detail = '```\n' + fs.readFileSync('check.txt', 'utf8').trim() + '\n```'; } catch (e) {}
+
+            const body = [
+              'The newest published capture is older than the staleness limit, or a',
+              'frame named by `meta.json` is missing.',
+              '',
+              'Readers are still being served the last good frames, so nothing looks',
+              'broken from the outside — which is exactly why this check exists.',
+              '',
+              detail,
+              '',
+              `Run: ${runUrl}`,
+            ].join('\n');
+
+            const existing = await github.rest.issues.listForRepo({
+              ...context.repo, state: 'open', labels: 'staleness',
+            });
+            if (existing.data.length) {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: existing.data[0].number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                ...context.repo, title, body, labels: ['staleness'],
+              });
+            }
+
+      - name: Close the tracking issue once healthy again
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const existing = await github.rest.issues.listForRepo({
+              ...context.repo, state: 'open', labels: 'staleness',
+            });
+            for (const issue of existing.data) {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: issue.number,
+                body: `Recovered — frames are fresh again. Run: ${runUrl}`,
+              });
+              await github.rest.issues.update({
+                ...context.repo, issue_number: issue.number, state: 'closed',
+              });
+            }
