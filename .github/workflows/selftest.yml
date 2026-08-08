@@ -1,0 +1,31 @@
+name: selftest
+
+# Manual only for now. The scheduled render job arrives once fetch (S1) and
+# publishing (S4) land; keeping this dispatch-only avoids burning runs on a
+# skeleton.
+on:
+  workflow_dispatch:
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Fetch, composite, encode
+        run: python selftest.py
+
+      - name: Upload rendered frame
+        uses: actions/upload-artifact@v4
+        with:
+          name: selftest-frame
+          path: selftest-out.jpg
+          retention-days: 7

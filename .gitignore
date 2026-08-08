@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Render outputs are artifacts, never committed.
+selftest-out.jpg
+out/
+*.tmp
