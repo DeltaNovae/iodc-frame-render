@@ -1,75 +1,75 @@
-"""S0 self-test: prove the runner environment can do its whole per-cycle job.
+"""Live self-test: exercise the real fetch path against the public service.
 
-Fetches one live frame from the public EUMETView WMS, composites the committed
-test overlay, and encodes the result. No credentials, no uploads — this is the
-toolchain proof that later stages build on (TIME pinning: S1; publishing: S4).
+Runs the same code the scheduled job will: read the advertised capture slots,
+pin one explicitly, fetch each view, validate, and composite an overlay.
 
-Run locally or via the workflow:  python selftest.py
+The 24-hour infrared product must succeed — it is the fallback the whole
+design leans on. The visible-light product is probed too but is *expected* to
+be rejected at night, so its outcome is reported rather than enforced; that
+probe is what proves the blank-frame guard works against the real service
+rather than only against fixtures.
+
+Usage:  python selftest.py
 """
 
-import io
+from __future__ import annotations
+
+import logging
 import os
 import sys
-import urllib.request
 
 from PIL import Image
 
-WMS = "https://view.eumetsat.int/geoserver/msg_iodc/ows"
+from iodc import wms
+from iodc.fetch import fetch_frame
+from iodc.validate import FrameInvalid
+from iodc.views import CLOSE, WIDE
 
-# Wide regional frame: Bay of Bengal through eastern India and the Myanmar coast.
-# WMS 1.3.0 + EPSG:4326 => bbox axis order is lat,lon (minLat,minLon,maxLat,maxLon).
-VIEW = {
-    "layer": "ir108",          # 24h product; always populated, unlike visible layers at night
-    "bbox": "10,80,28,100",
-    "width": 889,
-    "height": 800,
-}
+IR = "ir108"                     # 24 h product
+VISIBLE = "rgb_naturalenhncd"    # daylight only, by nature
 
 OVERLAY = os.path.join("overlays", "selftest-wide.png")
 OUT = "selftest-out.jpg"
 
-# A frame far below this is a blank/error tile rather than imagery (see S1 validation).
-MIN_BYTES = 8_000
-
-
-def fetch(view: dict) -> bytes:
-    query = (
-        f"?service=WMS&version=1.3.0&request=GetMap"
-        f"&layers={view['layer']}&styles=&crs=EPSG:4326"
-        f"&bbox={view['bbox']}&width={view['width']}&height={view['height']}"
-        f"&format=image/jpeg"
-    )
-    req = urllib.request.Request(WMS + query, headers={"User-Agent": "iodc-frame-render/selftest"})
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        if resp.status != 200:
-            raise SystemExit(f"FAIL: WMS returned HTTP {resp.status}")
-        return resp.read()
+logging.basicConfig(level=logging.INFO, format="   %(message)s")
 
 
 def main() -> int:
-    print("1. fetching a live frame from the public WMS ...")
-    raw = fetch(VIEW)
-    print(f"   got {len(raw) // 1024} KB")
-    if len(raw) < MIN_BYTES:
-        raise SystemExit(f"FAIL: implausibly small frame ({len(raw)} bytes) — blank slot?")
+    print("1. reading advertised capture slots ...")
+    caps = wms.fetch_capabilities()
+    dims = {}
+    for layer in (IR, VISIBLE):
+        dim = wms.parse_time_dimension(caps, layer)
+        dims[layer] = dim
+        print(f"   {layer:<20} newest slot {wms.format_iso(dim.latest)}  step {dim.step}")
 
-    frame = Image.open(io.BytesIO(raw)).convert("RGB")
-    print(f"   decoded {frame.size}")
-    if frame.size != (VIEW["width"], VIEW["height"]):
-        raise SystemExit(f"FAIL: unexpected frame size {frame.size}")
+    print("\n2. fetching the 24h product for every view (must succeed) ...")
+    frames = {}
+    for view in (WIDE, CLOSE):
+        frame = fetch_frame(IR, view, dims[IR])
+        frames[view.key] = frame
+        print(f"   {view.key:<6} {frame.stats.n_bytes // 1024:>4} KB  {frame.stats.width}x{frame.stats.height}"
+              f"  captured {wms.format_iso(frame.captured_at)}"
+              f"  mean {frame.stats.mean:.1f}  stddev {frame.stats.stddev:.1f}")
 
-    print("2. compositing the pre-authored overlay ...")
+    print("\n3. probing the visible-light product (rejection at night is correct) ...")
+    try:
+        vis = fetch_frame(VISIBLE, WIDE, dims[VISIBLE], ladder=1)
+        print(f"   accepted — daylight slot, mean {vis.stats.mean:.1f}")
+    except RuntimeError as exc:
+        print(f"   rejected as expected: {str(exc).split('|')[0].strip()}")
+
+    print("\n4. compositing the overlay onto the wide frame ...")
+    import io
+    frame = Image.open(io.BytesIO(frames["wide"].raw)).convert("RGB")
     overlay = Image.open(OVERLAY).convert("RGBA")
     if overlay.size != frame.size:
         raise SystemExit(f"FAIL: overlay {overlay.size} != frame {frame.size}")
     frame.paste(overlay, (0, 0), overlay)
-
-    print("3. encoding ...")
     frame.save(OUT, "JPEG", quality=82, optimize=True)
-    size_kb = os.path.getsize(OUT) // 1024
-    print(f"   wrote {OUT} ({size_kb} KB)")
+    print(f"   wrote {OUT} ({os.path.getsize(OUT) // 1024} KB)")
 
-    print("\nPASS — fetch, composite and encode all work in this environment.")
+    print("\nPASS — capabilities, slot pinning, validation and compositing all work.")
     return 0
 
 
