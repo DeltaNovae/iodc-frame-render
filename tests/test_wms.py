@@ -125,7 +125,8 @@ def test_getmap_url_pins_time_and_uses_lat_first_bbox():
     # WMS 1.3.0 + EPSG:4326 => minLat,minLon,maxLat,maxLon
     assert "bbox=10,80,28,100" in url
     assert "TIME=2026-08-08T17:30:00Z" in url
-    assert "width=889&height=800" in url
+    # Derived from the view, so tuning frame sizes cannot break this test.
+    assert f"width={WIDE.width}&height={WIDE.height}" in url
     assert "crs=EPSG:4326" in url
 
 

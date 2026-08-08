@@ -49,23 +49,34 @@ class View:
         return abs(pixel - geo) / geo
 
 
+# Frame sizes were measured, not guessed (§ 8.9). The satellite resolves ~4.5 km
+# over Bangladesh, so both views still request more pixels than exist — asking
+# for even more only encodes upscaling artefacts at 2G users' expense.
+#
+# What pins the floor is not the sensor but the OVERLAY: its labels are drawn at
+# absolute pixel sizes, so they cannot be shrunk with the frame and still be
+# read. That is why "publish small and let the device upscale" does not work
+# here — the text would blur.
+
 # Wide regional: the "what's coming" view — Bay of Bengal up through eastern
 # India, Nepal's edge and the Myanmar coast. Deliberately not clipped to any
 # country: cyclones form deep in the Bay days before landfall.
+# 700×630 ⇒ ~3.0 km/px, 1.5× the sensor. ~102 KB day / 87 KB night.
 WIDE = View(
     key="wide",
     bbox=BBox(min_lat=10, min_lon=80, max_lat=28, max_lon=100),
-    width=889,
-    height=800,
+    width=700,
+    height=630,
 )
 
 # Close-up: the "what's over us now" view — the delta plus roughly 150–230 km
-# of margin on every side, at the sensor's native resolution.
+# of margin on every side.
+# 640×640 ⇒ ~1.44 km/px, still 3.1× the sensor. ~85 KB day / 72 KB night.
 CLOSE = View(
     key="close",
     bbox=BBox(min_lat=19, min_lon=86, max_lat=28, max_lon=95),
-    width=800,
-    height=800,
+    width=640,
+    height=640,
 )
 
 VIEWS = {v.key: v for v in (WIDE, CLOSE)}

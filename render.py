@@ -32,7 +32,13 @@ from iodc.fetch import fetch_frame
 from iodc.views import VIEWS
 
 OUT_DIR = os.environ.get("RENDER_OUT", "out")
-JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "82"))
+
+# Measured at S4 (§ 8.9). Subsampling is the free part: satellite imagery is
+# almost all luminance detail, and a 3× magnified check showed the overlay's
+# thin amber lines and Bengali labels survive 4:2:0 indistinguishably — for a
+# quarter fewer bytes. Quality 78 is the floor before artefacts become visible.
+JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "78"))
+JPEG_SUBSAMPLING = int(os.environ.get("JPEG_SUBSAMPLING", "2"))   # 2 = 4:2:0
 
 log = logging.getLogger("render")
 
@@ -104,7 +110,8 @@ def main() -> int:
         for lang, payload in langs.items():
             name = f"{view_key}-{lang}.jpg"
             path = os.path.join(OUT_DIR, name)
-            payload["image"].save(path, "JPEG", quality=JPEG_QUALITY, optimize=True)
+            payload["image"].save(path, "JPEG", quality=JPEG_QUALITY,
+                                  subsampling=JPEG_SUBSAMPLING, optimize=True)
             log.info("  %-14s %3d KB  %s  captured %s", name,
                      os.path.getsize(path) // 1024, payload["layer"],
                      wms.format_iso(payload["captured_at"]))
