@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 
 from PIL import Image
 
-from iodc import overlays, products, publish, sizes, storage, validate, wms
+from iodc import overlays, products, publish, sizes, storage, storm, validate, wms
 from iodc.fetch import fetch_frame
 from iodc.views import VIEWS
 
@@ -47,53 +47,94 @@ log = logging.getLogger("render")
 
 def render_cycle(when: datetime, force: str | None = None,
                  pinned: bool = False) -> dict:
-    product = products.choose(when)
+    """Render every product for one instant.
+
+    A cycle is now plural: clouds walks its ladder, storm rides `ir108`
+    directly. A product that fails is logged and skipped rather than failing
+    the others — the section hides an absent tile, and the staleness alarm
+    keys on the oldest capture, so a silently dead product still escalates.
+
+    `force` narrows the cycle to a single branch for eyeballing; nobody
+    dispatching --force-night wants storm frames in the way.
+    """
     if force == "night":
-        rungs = [products.NIGHT]
+        jobs = {"clouds": [products.NIGHT]}
     elif force == "day":
-        rungs = [products.COLOUR_DAY]
+        jobs = {"clouds": [products.COLOUR_DAY]}
     elif force == "lowsun":
-        rungs = [products.LOW_SUN_DAY]
+        jobs = {"clouds": [products.LOW_SUN_DAY]}
+    elif force == "storm":
+        jobs = {"storm": [storm.STORM]}
     else:
-        rungs = products.ladder(when)
-    log.info("ladder for %s: %s", wms.format_iso(when),
-             " -> ".join(rung.layer for rung in rungs))
+        jobs = {"clouds": products.ladder(when), "storm": [storm.STORM]}
+    for key, rungs in jobs.items():
+        log.info("%s ladder for %s: %s", key, wms.format_iso(when),
+                 " -> ".join(rung.layer for rung in rungs))
 
     caps = wms.fetch_capabilities()
-    results = {"product": rungs[0], "product_key": rungs[0].key, "views": {}}
 
     # Production renders the newest slot; a pinned instant is only for
     # reproducing a specific moment (the daylight branch cannot be exercised
     # after dark otherwise).
     before = when if pinned else None
 
-    for view in VIEWS.values():
-        frame, used = _fetch_down_the_ladder(caps, rungs, view, before)
-        image = Image.open(io.BytesIO(frame.raw)).convert("RGB")
-        if used.is_night:
-            image = products.recolor_night(image)
-        elif used.brighten:
-            image = products.brighten(image)
+    # One upstream fetch per (layer, view, slot) regardless of how many
+    # products want it: at night both clouds and storm sit on ir108, and
+    # fetching the identical frame twice per view would double the upstream
+    # load for nothing.
+    fetched: dict = {}
 
-        for lang in overlays.languages():
-            overlay = overlays.load(view, lang, used.is_night)
-            composed = image.copy()
-            composed.paste(overlay, (0, 0), overlay)
-            results["views"].setdefault(view.key, {})[lang] = {
-                "image": composed,
-                "captured_at": frame.captured_at,
-                "layer": used.layer,
-            }
-        # meta carries one product for the set, and the views are the same
-        # instant over overlapping ground — so they land on the same rung in
-        # every case but a contrived one. Recording the rung actually used
-        # beats recording the one merely preferred.
-        results["product"] = used
-        results["product_key"] = used.key
+    results = {"products": {}}
+    for key, rungs in jobs.items():
+        views = {}
+        used = None
+        try:
+            for view in VIEWS.values():
+                frame, used = _fetch_down_the_ladder(caps, rungs, view, before,
+                                                     fetched)
+                image = Image.open(io.BytesIO(frame.raw)).convert("RGB")
+                image = _tone(image, used)
+
+                for lang in overlays.languages():
+                    overlay = overlays.load(view, lang, used.is_night)
+                    composed = image.copy()
+                    composed.paste(overlay, (0, 0), overlay)
+                    views.setdefault(view.key, {})[lang] = {
+                        "image": composed,
+                        "captured_at": frame.captured_at,
+                        "layer": used.layer,
+                    }
+        except RuntimeError as exc:
+            log.warning("product %s failed this cycle and is skipped: %s",
+                        key, exc)
+            continue
+        # Assigned only once EVERY view rendered: a product is published whole
+        # or not at all, so a half-rendered one never displaces a complete one.
+        # meta carries one rung per product; the views are the same instant
+        # over overlapping ground, so they land on the same rung in every case
+        # but a contrived one, and recording the rung actually used beats
+        # recording the one merely preferred.
+        results["products"][key] = {"product": used, "views": views}
+    if not results["products"]:
+        raise RuntimeError("every product failed this cycle")
     return results
 
 
-def _fetch_down_the_ladder(caps: bytes, rungs: list, view, before=None):
+def _tone(image, product):
+    """The product's colouring. Dispatch is by product key first because the
+    storm frame is built FROM the night layer — `is_night` alone would paint it
+    navy."""
+    if product.key == "storm":
+        return storm.recolor_storm(image)
+    if product.is_night:
+        return products.recolor_night(image)
+    if product.brighten:
+        return products.brighten(image)
+    return image
+
+
+def _fetch_down_the_ladder(caps: bytes, rungs: list, view, before=None,
+                           fetched: dict = None):
     """Walk the ladder; the first rung yielding a usable frame wins.
 
     Only exhausting every rung is a failure. Each rejection is logged with its
@@ -102,13 +143,21 @@ def _fetch_down_the_ladder(caps: bytes, rungs: list, view, before=None):
     """
     problems = []
     for rung in rungs:
+        # The guard is part of the cache key: a frame accepted unguarded must
+        # not satisfy a guarded request that would have rejected it.
+        cache_key = (rung.layer, view.key, before, rung.guard_washed_out)
+        if fetched is not None and cache_key in fetched:
+            return fetched[cache_key], rung
         dim = wms.parse_time_dimension(caps, rung.layer)
         guard = {}
         if rung.guard_washed_out:
             guard = {"max_mean": validate.MAX_MEAN,
                      "max_clipped": validate.MAX_CLIPPED}
         try:
-            return fetch_frame(rung.layer, view, dim, before=before, **guard), rung
+            frame = fetch_frame(rung.layer, view, dim, before=before, **guard)
+            if fetched is not None:
+                fetched[cache_key] = frame
+            return frame, rung
         except RuntimeError as exc:
             problems.append(f"{rung.layer}: {exc}")
             log.warning("%s unusable for %s — trying the next rung",
@@ -136,25 +185,29 @@ def publish_cycle(result: dict, client, target: publish.Target) -> dict:
     previous = publish.read_meta(client, target)
     history = publish.history_from_meta(previous)
 
-    product_key = result["product_key"]
-    entries = {}
-    for view_key, langs in result["views"].items():
-        for lang, payload in langs.items():
-            captured_at = payload["captured_at"]
-            # All three sizes derive from the one composited image, so they can
-            # never disagree with each other or with the capture time they are
-            # keyed by.
-            for size in sizes.SIZES:
-                key = publish.frame_key(target.prefix, product_key, view_key,
-                                        lang, size.key, captured_at)
-                body = encode(size.scale(payload["image"]), quality=size.quality)
-                client.put(key, body, publish.CONTENT_TYPE,
-                           publish.FRAME_CACHE_CONTROL)
-                log.info("  put %-58s %3d KB", key, len(body) // 1024)
-            entries[(view_key, lang)] = captured_at
+    to_publish = {}
+    for product_key, payload in result["products"].items():
+        entries = {}
+        for view_key, langs in payload["views"].items():
+            for lang, view_payload in langs.items():
+                captured_at = view_payload["captured_at"]
+                # All three sizes derive from the one composited image, so they
+                # can never disagree with each other or with the capture time
+                # they are keyed by.
+                for size in sizes.SIZES:
+                    key = publish.frame_key(target.prefix, product_key, view_key,
+                                            lang, size.key, captured_at)
+                    body = encode(size.scale(view_payload["image"]),
+                                  quality=size.quality)
+                    client.put(key, body, publish.CONTENT_TYPE,
+                               publish.FRAME_CACHE_CONTROL)
+                    log.info("  put %-58s %3d KB", key, len(body) // 1024)
+                entries[(view_key, lang)] = captured_at
+        to_publish[product_key] = {"product": payload["product"],
+                                   "entries": entries}
 
-    products = {product_key: {"product": result["product"], "entries": entries}}
-    meta = publish.build_meta(target.prefix, products, history)
+    meta = publish.carry_forward(
+        publish.build_meta(target.prefix, to_publish, history), previous)
     client.put(publish.meta_key(target.prefix),
                json.dumps(meta, indent=2).encode("utf-8"),
                "application/json", publish.META_CACHE_CONTROL)
@@ -192,6 +245,8 @@ def main() -> int:
     ap.add_argument("--force-day", action="store_const", const="day", dest="force")
     ap.add_argument("--force-lowsun", action="store_const", const="lowsun", dest="force",
                     help="the raw-visible rung, unguarded — inspect it directly")
+    ap.add_argument("--force-storm", action="store_const", const="storm", dest="force",
+                    help="the storm product alone")
     ap.add_argument("--publish", action="store_true",
                     help="upload to object storage (needs S3_* in the environment)")
     ap.add_argument("--dry-run", metavar="DIR",
@@ -217,17 +272,22 @@ def main() -> int:
     # Local output writes every size too — the point of looking at a render by
     # hand is usually to judge whether the small ones are still readable.
     os.makedirs(OUT_DIR, exist_ok=True)
-    for view_key, langs in result["views"].items():
+    for product_key, product_payload in result["products"].items():
+        _write_local(product_key, product_payload["views"])
+    return 0
+
+
+def _write_local(product_key: str, views: dict) -> None:
+    for view_key, langs in views.items():
         for lang, payload in langs.items():
             for size in sizes.SIZES:
-                name = f"{result['product_key']}-{view_key}-{lang}-{size.key}.jpg"
+                name = f"{product_key}-{view_key}-{lang}-{size.key}.jpg"
                 path = os.path.join(OUT_DIR, name)
                 with open(path, "wb") as fh:
                     fh.write(encode(size.scale(payload["image"]), quality=size.quality))
                 log.info("  %-40s %3d KB  %s  captured %s", name,
                          os.path.getsize(path) // 1024, payload["layer"],
                          wms.format_iso(payload["captured_at"]))
-    return 0
 
 
 if __name__ == "__main__":

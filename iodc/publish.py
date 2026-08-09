@@ -149,6 +149,35 @@ def _sizes_for(prefix: str, product: str, view: str, lang: str,
     }
 
 
+def carry_forward(meta: dict, previous: dict) -> dict:
+    """Keep products this cycle did not publish, from the previous pointer.
+
+    A product that fails one cycle still has fifteen-minute-old frames sitting
+    in the bucket; dropping it from the pointer would hide its tile for no
+    reason. Its entry is carried unchanged — and `generatedAtUtc` is then
+    recomputed across everything the pointer now names, because the oldest-
+    capture rule has to account for the carried product's age too: that is
+    exactly how a stalled product surfaces in the staleness alarm instead of
+    quietly pinning the caption to the healthy one.
+
+    Only v2 entries carry (v1 keys are in the dead layout), and a product the
+    cycle DID publish is never overwritten by its older self.
+    """
+    for product_key, product in (previous.get("products") or {}).items():
+        if product_key not in meta["products"]:
+            meta["products"][product_key] = product
+
+    stamps = [
+        view.get("capturedAtUtc")
+        for product in meta["products"].values()
+        for view in (product.get("views") or {}).values()
+        if view.get("capturedAtUtc")
+    ]
+    if stamps:
+        meta["generatedAtUtc"] = min(stamps)
+    return meta
+
+
 def _iso(when: datetime) -> str:
     return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 

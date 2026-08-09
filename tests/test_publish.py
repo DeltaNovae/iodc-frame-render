@@ -223,3 +223,58 @@ def test_no_endpoint_or_bucket_is_baked_into_the_code():
     source = inspect.getsource(publish) + inspect.getsource(storage)
     for marker in ("r2.cloudflarestorage", "https://", ".com/"):
         assert marker not in source.replace("https://", "", 0) or "os.environ" in source
+
+
+# ── carry-forward ─────────────────────────────────────────────────────────────
+
+def test_a_product_absent_from_this_cycle_is_carried_from_the_previous_pointer():
+    """A product that fails one cycle still has near-fresh frames in the
+    bucket; dropping it from the pointer would hide its tile for no reason."""
+    previous = publish.build_meta(PREFIX, {
+        "clouds": {"product": DAY, "entries": entries(T0)},
+        "storm": {"product": products.NIGHT, "entries": entries(T0)},
+    }, {})
+    this_cycle = publish.build_meta(
+        PREFIX, one_product(when=T0 + timedelta(minutes=15)), {})
+
+    merged = publish.carry_forward(this_cycle, previous)
+
+    assert set(merged["products"]) == {"clouds", "storm"}
+    assert merged["products"]["storm"]["layer"] == products.INFRARED_LAYER
+
+
+def test_carry_forward_never_overwrites_what_this_cycle_published():
+    fresh = T0 + timedelta(minutes=15)
+    previous = publish.build_meta(PREFIX, one_product(when=T0), {})
+    this_cycle = publish.build_meta(PREFIX, one_product(when=fresh), {})
+
+    merged = publish.carry_forward(this_cycle, previous)
+
+    view = merged["products"][CLOUDS]["views"]["close-bn"]
+    assert view["capturedAtUtc"] == "2026-09-20T07:30:00Z"
+
+
+def test_generated_time_accounts_for_the_carried_products_age():
+    """The oldest-capture rule must include what was carried, or a stalled
+    product would quietly pin the caption to the healthy one — hiding exactly
+    the staleness the alarm and the app label exist to surface."""
+    stale = T0 - timedelta(minutes=90)
+    previous = publish.build_meta(PREFIX, {
+        "storm": {"product": products.NIGHT, "entries": entries(stale)},
+    }, {})
+    this_cycle = publish.build_meta(PREFIX, one_product(when=T0), {})
+
+    merged = publish.carry_forward(this_cycle, previous)
+
+    assert merged["generatedAtUtc"] == "2026-09-20T05:45:00Z"
+
+
+def test_carry_forward_ignores_a_v1_pointer():
+    """v1 entries are in the dead key layout; carrying them would republish
+    URLs that 404."""
+    previous = {"version": 1, "views": {"wide-bn": {"latest": "sat/wide-bn/x.jpg"}}}
+    this_cycle = publish.build_meta(PREFIX, one_product(), {})
+
+    merged = publish.carry_forward(this_cycle, previous)
+
+    assert set(merged["products"]) == {CLOUDS}
