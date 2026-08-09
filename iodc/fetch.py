@@ -36,10 +36,14 @@ class Frame:
 
 def fetch_frame(layer: str, view, time_dim: wms.TimeDimension,
                 ladder: int = DEFAULT_LADDER, getter=wms.http_get,
-                before=None) -> Frame:
+                before=None, max_mean=None, max_clipped=None) -> Frame:
     """Fetch and validate one view of one product. Raises if every slot fails.
 
     ``before`` starts the ladder at a given moment rather than the newest slot.
+
+    ``max_mean`` / ``max_clipped`` arm the washed-out ceiling for products that
+    can suffer it. They reject the *slot*, so the walk-back doubles as cover for
+    one glare-ruined capture inside an otherwise good hour.
     """
     failures = []
     for when in time_dim.slots_desc(ladder, before=before):
@@ -53,15 +57,17 @@ def fetch_frame(layer: str, view, time_dim: wms.TimeDimension,
             continue
 
         try:
-            stats = validate_frame(raw, view.size)
+            stats = validate_frame(raw, view.size,
+                                   max_mean=max_mean, max_clipped=max_clipped)
         except FrameInvalid as exc:
             log.warning("%s/%s @ %s: rejected: %s", layer, view.key,
                         wms.format_iso(when), exc)
             failures.append(f"{wms.format_iso(when)}: {exc}")
             continue
 
-        log.info("%s/%s @ %s: ok (%d KB, mean %.1f, stddev %.1f)", layer, view.key,
-                 wms.format_iso(when), stats.n_bytes // 1024, stats.mean, stats.stddev)
+        log.info("%s/%s @ %s: ok (%d KB, mean %.1f, stddev %.1f, clipped %.1f%%)",
+                 layer, view.key, wms.format_iso(when), stats.n_bytes // 1024,
+                 stats.mean, stats.stddev, stats.clipped * 100)
         return Frame(view.key, layer, when, raw, stats)
 
     raise RuntimeError(

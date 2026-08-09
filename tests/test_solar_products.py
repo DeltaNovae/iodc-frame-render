@@ -105,3 +105,88 @@ def test_recolor_returns_rgb_at_the_original_size():
     out = products.recolor_night(Image.new("L", (17, 5), 128))
     assert out.mode == "RGB"
     assert out.size == (17, 5)
+
+
+# ── the product ladder ────────────────────────────────────────────────────────
+
+def test_daylight_offers_colour_then_raw_visible_then_infrared():
+    """The middle rung is the whole point: a low-sun frame degrades to a duller
+    *daytime* picture rather than to something that looks like night."""
+    rungs = products.ladder(datetime(2026, 8, 8, 6, tzinfo=timezone.utc))
+    assert [rung.layer for rung in rungs] == [
+        products.VISIBLE_LAYER, products.LOW_SUN_LAYER, products.INFRARED_LAYER
+    ]
+
+
+def test_night_offers_infrared_alone():
+    """No point paying two round trips per view to be told it is dark."""
+    rungs = products.ladder(datetime(2026, 8, 8, 18, tzinfo=timezone.utc))
+    assert [rung.layer for rung in rungs] == [products.INFRARED_LAYER]
+
+
+def test_only_the_colour_rung_is_guarded_against_washing_out():
+    """Infrared and raw visible legitimately run bright over heavy convection;
+    guarding them would throw good frames away."""
+    day, low_sun, night = products.ladder(
+        datetime(2026, 8, 8, 6, tzinfo=timezone.utc))
+    assert day.guard_washed_out
+    assert not low_sun.guard_washed_out
+    assert not night.guard_washed_out
+
+
+def test_the_low_sun_rung_is_a_daytime_frame_and_takes_the_day_overlay():
+    _, low_sun, _ = products.ladder(datetime(2026, 8, 8, 6, tzinfo=timezone.utc))
+    assert not low_sun.is_night
+    assert low_sun.overlay_suffix == ""
+    assert low_sun.brighten
+
+
+def test_only_the_low_sun_rung_is_brightened():
+    day, low_sun, night = products.ladder(
+        datetime(2026, 8, 8, 6, tzinfo=timezone.utc))
+    assert [day.brighten, low_sun.brighten, night.brighten] == [False, True, False]
+
+
+# ── low-sun brightening ───────────────────────────────────────────────────────
+
+def dim_ramp(high: int, size=(256, 1)) -> Image.Image:
+    """A greyscale ramp topping out at `high` — a dim frame with structure."""
+    img = Image.new("L", size)
+    img.putdata([round(i * high / (size[0] - 1)) for i in range(size[0])])
+    return img.convert("RGB")
+
+
+def test_brighten_lifts_a_dim_frame_to_a_readable_exposure():
+    """The measured 07:00 raw-visible frame peaks near 100 of 255."""
+    out = products.brighten(dim_ramp(100))
+    assert max(out.convert("L").getdata()) == pytest.approx(245, abs=3)
+
+
+def test_brighten_never_creates_the_clipping_it_exists_to_avoid():
+    for high in (40, 100, 180, 240):
+        out = products.brighten(dim_ramp(high))
+        assert max(out.convert("L").getdata()) < 255
+
+
+def test_brighten_caps_its_gain_so_near_darkness_is_not_amplified_into_noise():
+    """A frame this dark is night arriving early; it belongs on the infrared
+    rung, not stretched by 8x."""
+    out = products.brighten(dim_ramp(30))
+    assert max(out.convert("L").getdata()) == pytest.approx(
+        30 * products.BRIGHTEN_MAX_GAIN, abs=3)
+
+
+def test_brighten_leaves_an_already_bright_frame_alone():
+    out = products.brighten(dim_ramp(252))
+    assert list(out.getdata()) == list(dim_ramp(252).getdata())
+
+
+def test_brighten_is_monotonic_so_cloud_structure_survives():
+    values = list(products.brighten(dim_ramp(100)).convert("L").getdata())
+    assert values == sorted(values)
+
+
+def test_brighten_keeps_size_and_mode():
+    out = products.brighten(dim_ramp(90, size=(64, 8)))
+    assert out.size == (64, 8)
+    assert out.mode == "RGB"

@@ -4,8 +4,9 @@ This is the whole per-cycle job apart from publishing, which lands next. The
 shape is deliberately linear and boring — it runs unattended every 15 minutes,
 and the interesting behaviour lives in the guards:
 
-  * the product is chosen by sun elevation, but a visible frame that fails
-    validation falls back to infrared rather than failing the cycle;
+  * the product is a *ladder*, not a choice: colour, then raw visible, then
+    infrared, and the first rung that survives validation is published, so a
+    washed-out or unrendered frame degrades instead of failing the cycle;
   * the overlay is refused unless it declares the frame's own rectangle;
   * nothing is written until every view has produced a usable frame, so a
     partial cycle never replaces a good complete one.
@@ -28,7 +29,7 @@ from datetime import datetime, timezone
 
 from PIL import Image
 
-from iodc import overlays, products, publish, storage, wms
+from iodc import overlays, products, publish, storage, validate, wms
 from iodc.fetch import fetch_frame
 from iodc.views import VIEWS
 
@@ -48,14 +49,18 @@ def render_cycle(when: datetime, force: str | None = None,
                  pinned: bool = False) -> dict:
     product = products.choose(when)
     if force == "night":
-        product = products.infrared_fallback()
+        rungs = [products.NIGHT]
     elif force == "day":
-        product = products.Product(products.VISIBLE_LAYER, is_night=False)
-    log.info("chose %s (%s) for %s", product.layer,
-             "night" if product.is_night else "day", wms.format_iso(when))
+        rungs = [products.COLOUR_DAY]
+    elif force == "lowsun":
+        rungs = [products.LOW_SUN_DAY]
+    else:
+        rungs = products.ladder(when)
+    log.info("ladder for %s: %s", wms.format_iso(when),
+             " -> ".join(rung.layer for rung in rungs))
 
     caps = wms.fetch_capabilities()
-    results = {"product": product, "views": {}}
+    results = {"product": rungs[0], "views": {}}
 
     # Production renders the newest slot; a pinned instant is only for
     # reproducing a specific moment (the daylight branch cannot be exercised
@@ -63,10 +68,12 @@ def render_cycle(when: datetime, force: str | None = None,
     before = when if pinned else None
 
     for view in VIEWS.values():
-        frame, used = _fetch_with_fallback(caps, product, view, before)
+        frame, used = _fetch_down_the_ladder(caps, rungs, view, before)
         image = Image.open(io.BytesIO(frame.raw)).convert("RGB")
         if used.is_night:
             image = products.recolor_night(image)
+        elif used.brighten:
+            image = products.brighten(image)
 
         for lang in overlays.languages():
             overlay = overlays.load(view, lang, used.is_night)
@@ -77,22 +84,37 @@ def render_cycle(when: datetime, force: str | None = None,
                 "captured_at": frame.captured_at,
                 "layer": used.layer,
             }
+        # meta carries one product for the set, and the views are the same
+        # instant over overlapping ground — so they land on the same rung in
+        # every case but a contrived one. Recording the rung actually used
+        # beats recording the one merely preferred.
+        results["product"] = used
     return results
 
 
-def _fetch_with_fallback(caps: bytes, product: products.Product, view, before=None):
-    """Preferred product first; infrared is the safety net, never the failure."""
-    dim = wms.parse_time_dimension(caps, product.layer)
-    try:
-        return fetch_frame(product.layer, view, dim, before=before), product
-    except RuntimeError as exc:
-        if product.is_night:
-            raise
-        log.warning("visible product unusable for %s — falling back to infrared (%s)",
-                    view.key, str(exc).split(";")[0])
-        fallback = products.infrared_fallback()
-        dim = wms.parse_time_dimension(caps, fallback.layer)
-        return fetch_frame(fallback.layer, view, dim, before=before), fallback
+def _fetch_down_the_ladder(caps: bytes, rungs: list, view, before=None):
+    """Walk the ladder; the first rung yielding a usable frame wins.
+
+    Only exhausting every rung is a failure. Each rejection is logged with its
+    reason, because "which rung did this morning land on, and why" is the
+    question this design will actually be asked.
+    """
+    problems = []
+    for rung in rungs:
+        dim = wms.parse_time_dimension(caps, rung.layer)
+        guard = {}
+        if rung.guard_washed_out:
+            guard = {"max_mean": validate.MAX_MEAN,
+                     "max_clipped": validate.MAX_CLIPPED}
+        try:
+            return fetch_frame(rung.layer, view, dim, before=before, **guard), rung
+        except RuntimeError as exc:
+            problems.append(f"{rung.layer}: {exc}")
+            log.warning("%s unusable for %s — trying the next rung",
+                        rung.layer, view.key)
+
+    raise RuntimeError(
+        f"every product failed for {view.key}: " + " | ".join(problems))
 
 
 def encode(image) -> bytes:
@@ -142,6 +164,8 @@ def main() -> int:
     ap.add_argument("--at", help="ISO8601 UTC instant; defaults to now")
     ap.add_argument("--force-night", action="store_const", const="night", dest="force")
     ap.add_argument("--force-day", action="store_const", const="day", dest="force")
+    ap.add_argument("--force-lowsun", action="store_const", const="lowsun", dest="force",
+                    help="the raw-visible rung, unguarded — inspect it directly")
     ap.add_argument("--publish", action="store_true",
                     help="upload to object storage (needs S3_* in the environment)")
     ap.add_argument("--dry-run", metavar="DIR",
