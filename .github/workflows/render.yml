@@ -1,19 +1,28 @@
 name: render
 
 on:
-  # Every 15 minutes, matching the upstream capture cadence. Actions schedules
-  # are best-effort and drift under load, which is fine here: frames carry their
-  # own capture time, so a late run publishes a correctly-labelled frame rather
-  # than a wrong one. Missed slots are simply skipped — the next run picks up
-  # whatever is newest.
+  # Upstream produces a slot every 15 minutes, so that is the cadence worth
+  # having — but **the schedule cannot deliver it**. Measured over 15 hours,
+  # a '*/15' cron fired a median of 37 minutes apart (mean 44, worst 103) with
+  # zero failures: GitHub throttles scheduled workflows on shared runners and
+  # simply drops firings. Frames were reaching phones 30-100 minutes old.
+  #
+  # So the frequency comes from inside the run, not from the scheduler: each
+  # firing renders CYCLES times, sleeping between. The cron is then only asking
+  # "start a batch", which throttling can delay but not thin out.
+  #
+  # '*/20' rather than '*/15' so a fully honoured schedule still cannot overlap
+  # itself: a batch takes ~16 minutes, comfortably inside 20. If throttling
+  # keeps firings ~40 minutes apart, each one still publishes twice, which
+  # halves the on-screen age rather than leaving it to chance.
   schedule:
-    - cron: '*/15 * * * *'
+    - cron: '*/20 * * * *'
   workflow_dispatch:
     inputs:
       force:
-        description: Force a product instead of choosing by sun elevation
+        description: Force a product instead of walking the ladder
         type: choice
-        options: [auto, day, night]
+        options: [auto, day, lowsun, night]
         default: auto
       dry_run:
         description: Render without publishing
@@ -26,10 +35,19 @@ concurrency:
   group: render
   cancel-in-progress: false
 
+env:
+  # A manual dispatch renders once and returns — nobody watching a run wants to
+  # wait out a sleep to see the result. Only the schedule batches.
+  CYCLES: ${{ github.event_name == 'schedule' && 2 || 1 }}
+  # Just under a slot, so a batch finishes well inside its 20-minute window.
+  INTERVAL_SECONDS: 840
+
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Covers the whole batch — one cycle plus INTERVAL plus a second cycle —
+    # and still ends before the next scheduled firing.
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
 
@@ -46,24 +64,34 @@ jobs:
           S3_BUCKET: ${{ secrets.S3_BUCKET }}
           S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          FORCE: ${{ inputs.force }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           ARGS=""
-          case "${{ inputs.force }}" in
-            day)   ARGS="--force-day" ;;
-            night) ARGS="--force-night" ;;
+          case "$FORCE" in
+            day)    ARGS="--force-day" ;;
+            lowsun) ARGS="--force-lowsun" ;;
+            night)  ARGS="--force-night" ;;
           esac
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            python render.py $ARGS
-          else
-            python render.py $ARGS --publish
+          if [ "$DRY_RUN" != "true" ]; then
+            ARGS="$ARGS --publish"
           fi
-        # A single failed cycle is not an incident: the previous frames keep
-        # serving, and the next run is 15 minutes away. Sustained failure is
-        # what matters, and staleness is how it is detected.
-        continue-on-error: true
+
+          for i in $(seq 1 "$CYCLES"); do
+            if [ "$i" -gt 1 ]; then
+              echo "--- waiting ${INTERVAL_SECONDS}s for the next slot ---"
+              sleep "$INTERVAL_SECONDS"
+            fi
+            echo "--- cycle $i of $CYCLES ---"
+            # A single failed cycle is not an incident: the previous frames keep
+            # serving and another cycle is minutes away. The loop must survive
+            # it, so the failure is logged rather than raised. Sustained failure
+            # is what matters, and staleness is how that is detected.
+            python render.py $ARGS || echo "cycle $i failed; previous frames keep serving"
+          done
 
       # Publishing without error is not the same as the result being usable:
-      # read it back the way a client would.
+      # read it back the way a client would. Runs once, after the last cycle.
       - name: Verify what is live
         if: ${{ !inputs.dry_run }}
         env:
