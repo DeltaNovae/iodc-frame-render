@@ -41,21 +41,36 @@ def main() -> int:
         .replace(tzinfo=timezone.utc)
     age = (datetime.now(timezone.utc) - captured).total_seconds() / 60
 
-    print(f"product     : {meta['product']} ({meta['layer']})")
     print(f"captured    : {meta['generatedAtUtc']}  ({age:.0f} min ago)")
     print(f"attribution : {meta['attribution']}")
+    print(f"version     : {meta.get('version')}")
 
     problems = []
-    for name, view in meta["views"].items():
-        try:
-            body = client.get(view["latest"])
-            size_kb = len(body) // 1024
-        except FileNotFoundError:
-            problems.append(f"{name}: meta names {view['latest']} but it is not there")
-            continue
-        if not body.startswith(b"\xff\xd8"):
-            problems.append(f"{name}: {view['latest']} is not a JPEG")
-        print(f"  {name:<10} {size_kb:>4} KB  {len(view['frames'])} frame(s) retained")
+    products = meta.get("products")
+    if not products:
+        problems.append("meta names no products — nothing is being served")
+        products = {}
+
+    # Every size is checked, not only the one the viewer uses: a missing thumb
+    # would leave the Home row blank while the viewer looked perfectly healthy,
+    # which is precisely the class of failure this script exists to catch.
+    for product_key, product in products.items():
+        print(f"product     : {product_key} "
+              f"({product.get('source')} / {product.get('layer')})")
+        for name, view in product["views"].items():
+            report = []
+            for size_key, url in view["latest"].items():
+                try:
+                    body = client.get(url)
+                except FileNotFoundError:
+                    problems.append(
+                        f"{product_key}/{name}: meta names {url} but it is not there")
+                    continue
+                if not body.startswith(b"\xff\xd8"):
+                    problems.append(f"{product_key}/{name}: {url} is not a JPEG")
+                report.append(f"{size_key} {len(body) // 1024:>3} KB")
+            print(f"  {name:<10} {' · '.join(report):<36} "
+                  f"{len(view.get('frames', []))} frame(s) retained")
 
     if age > args.max_age_minutes:
         problems.append(

@@ -10,7 +10,7 @@ import io
 from PIL import Image
 
 import render
-from iodc import overlays
+from iodc import overlays, sizes
 from iodc.views import CLOSE, WIDE
 
 # What the satellite actually resolves over Bangladesh: 3 km at nadir, degraded
@@ -70,3 +70,72 @@ def test_a_composited_frame_stays_inside_the_delivery_budget():
 def test_encoder_settings_are_the_measured_ones():
     assert render.JPEG_SUBSAMPLING == 2      # 4:2:0
     assert 74 <= render.JPEG_QUALITY <= 82
+
+
+# ── the three published sizes ─────────────────────────────────────────────────
+#
+# One image cannot serve the viewer, the Home tile and the loop at once. The
+# arithmetic that forced three sizes: at four products the Home row would pull
+# ~340 KB of full frames to paint ~104 dp tiles, and a twelve-frame loop of full
+# frames is ~1 MB on the wire and ~20 MB of decoded bitmaps on a 1-2 GB device.
+
+def cloudlike(view):
+    import random
+
+    from PIL import ImageFilter
+    rnd = random.Random(5)
+    base = Image.new("RGB", view.size)
+    base.putdata([(rnd.randrange(40, 220),) * 3
+                  for _ in range(view.width * view.height)])
+    base = base.filter(ImageFilter.GaussianBlur(2.2))
+    overlay = overlays.load(view, "bn", night=False)
+    base.paste(overlay, (0, 0), overlay)
+    return base
+
+
+def test_every_size_encodes_inside_its_own_ceiling():
+    for view in (WIDE, CLOSE):
+        frame = cloudlike(view)
+        for size in sizes.SIZES:
+            body = render.encode(size.scale(frame), quality=size.quality)
+            limit = sizes.BUDGET_BYTES[size.key]
+            assert len(body) <= limit, \
+                f"{view.key}/{size.key} encodes to {len(body)} B (limit {limit})"
+
+
+def test_a_full_home_row_of_four_products_fits_a_2g_connection():
+    """The reason thumbnails exist at all: four tiles, one thumbnail each."""
+    thumb = render.encode(sizes.THUMB.scale(cloudlike(CLOSE)),
+                          quality=sizes.THUMB.quality)
+    assert len(thumb) * 4 < 60_000
+
+
+def test_a_twelve_frame_loop_stays_under_half_a_megabyte():
+    loop = render.encode(sizes.LOOP.scale(cloudlike(CLOSE)),
+                         quality=sizes.LOOP.quality)
+    assert len(loop) * 12 < 500_000
+
+
+def test_sizes_never_upscale():
+    """A size is a ceiling, not a target — a small source must pass through."""
+    small = Image.new("RGB", (100, 80), (128, 128, 128))
+    for size in sizes.SIZES:
+        assert size.scale(small).size == (100, 80)
+
+
+def test_scaling_preserves_aspect_so_neither_view_is_distorted():
+    for view in (WIDE, CLOSE):
+        frame = Image.new("RGB", view.size)
+        for size in sizes.SIZES:
+            scaled = size.scale(frame)
+            assert max(scaled.size) <= (size.max_edge or max(view.size))
+            before = view.width / view.height
+            after = scaled.width / scaled.height
+            assert abs(after - before) / before < 0.01, f"{view.key}/{size.key}"
+
+
+def test_the_full_size_is_the_frame_as_measured():
+    """`full` must stay the section 8.9 frame, untouched by this machinery."""
+    assert sizes.FULL.max_edge is None
+    for view in (WIDE, CLOSE):
+        assert sizes.FULL.scale(Image.new("RGB", view.size)).size == view.size

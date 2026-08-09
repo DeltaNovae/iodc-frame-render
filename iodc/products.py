@@ -48,6 +48,11 @@ DECISION_POINT = (23.8103, 90.4125)
 class Product:
     layer: str
     is_night: bool
+    #: Which **app-facing product** this rung serves. All three cloud rungs are
+    #: the same tile to a user — "what does the sky look like" — so they publish
+    #: under one key and the ladder stays invisible outside this module. Storm,
+    #: rain and fog will each carry their own.
+    key: str = "clouds"
     #: Guard against the washed-out failure. Only the solar-zenith-corrected
     #: colour product can fail this way; the others legitimately run bright over
     #: heavy convection and must not be judged by it.

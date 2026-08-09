@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 
 from PIL import Image
 
-from iodc import overlays, products, publish, storage, validate, wms
+from iodc import overlays, products, publish, sizes, storage, validate, wms
 from iodc.fetch import fetch_frame
 from iodc.views import VIEWS
 
@@ -60,7 +60,7 @@ def render_cycle(when: datetime, force: str | None = None,
              " -> ".join(rung.layer for rung in rungs))
 
     caps = wms.fetch_capabilities()
-    results = {"product": rungs[0], "views": {}}
+    results = {"product": rungs[0], "product_key": rungs[0].key, "views": {}}
 
     # Production renders the newest slot; a pinned instant is only for
     # reproducing a specific moment (the daylight branch cannot be exercised
@@ -89,6 +89,7 @@ def render_cycle(when: datetime, force: str | None = None,
         # every case but a contrived one. Recording the rung actually used
         # beats recording the one merely preferred.
         results["product"] = used
+        results["product_key"] = used.key
     return results
 
 
@@ -117,10 +118,10 @@ def _fetch_down_the_ladder(caps: bytes, rungs: list, view, before=None):
         f"every product failed for {view.key}: " + " | ".join(problems))
 
 
-def encode(image) -> bytes:
+def encode(image, quality: int = None) -> bytes:
     buf = io.BytesIO()
-    image.save(buf, "JPEG", quality=JPEG_QUALITY, subsampling=JPEG_SUBSAMPLING,
-               optimize=True)
+    image.save(buf, "JPEG", quality=quality or JPEG_QUALITY,
+               subsampling=JPEG_SUBSAMPLING, optimize=True)
     return buf.getvalue()
 
 
@@ -135,28 +136,53 @@ def publish_cycle(result: dict, client, target: publish.Target) -> dict:
     previous = publish.read_meta(client, target)
     history = publish.history_from_meta(previous)
 
+    product_key = result["product_key"]
     entries = {}
     for view_key, langs in result["views"].items():
         for lang, payload in langs.items():
             captured_at = payload["captured_at"]
-            key = publish.frame_key(target.prefix, view_key, lang, captured_at)
-            body = encode(payload["image"])
-            client.put(key, body, publish.CONTENT_TYPE, publish.FRAME_CACHE_CONTROL)
-            log.info("  put %-42s %3d KB", key, len(body) // 1024)
+            # All three sizes derive from the one composited image, so they can
+            # never disagree with each other or with the capture time they are
+            # keyed by.
+            for size in sizes.SIZES:
+                key = publish.frame_key(target.prefix, product_key, view_key,
+                                        lang, size.key, captured_at)
+                body = encode(size.scale(payload["image"]), quality=size.quality)
+                client.put(key, body, publish.CONTENT_TYPE,
+                           publish.FRAME_CACHE_CONTROL)
+                log.info("  put %-58s %3d KB", key, len(body) // 1024)
             entries[(view_key, lang)] = captured_at
 
-    meta = publish.build_meta(target.prefix, result["product"], entries, history)
+    products = {product_key: {"product": result["product"], "entries": entries}}
+    meta = publish.build_meta(target.prefix, products, history)
     client.put(publish.meta_key(target.prefix),
                json.dumps(meta, indent=2).encode("utf-8"),
                "application/json", publish.META_CACHE_CONTROL)
-    log.info("  put %-42s (now visible)", publish.meta_key(target.prefix))
+    log.info("  put %-58s (now visible)", publish.meta_key(target.prefix))
 
-    merged = publish.history_from_meta(meta)
-    for key in publish.prunable(history | merged, target.prefix):
-        if key not in {v["latest"] for v in meta["views"].values()}:
+    # Merge rather than replace: a cycle publishes one product, and pruning must
+    # not treat the products it did not touch as having no history.
+    merged = _merge_history(history, publish.history_from_meta(meta))
+    live = {
+        url
+        for product in meta["products"].values()
+        for view in product["views"].values()
+        for url in view["latest"].values()
+    }
+    for key in publish.prunable(merged, target.prefix):
+        if key not in live:
             client.delete(key)
             log.info("  pruned %s", key)
     return meta
+
+
+def _merge_history(older: dict, newer: dict) -> dict:
+    out = {k: {n: list(t) for n, t in v.items()} for k, v in older.items()}
+    for product_key, views in newer.items():
+        target = out.setdefault(product_key, {})
+        for name, times in views.items():
+            target[name] = sorted(set(target.get(name, [])) | set(times))
+    return out
 
 
 def main() -> int:
@@ -188,16 +214,19 @@ def main() -> int:
         publish_cycle(result, client, target)
         return 0
 
+    # Local output writes every size too — the point of looking at a render by
+    # hand is usually to judge whether the small ones are still readable.
     os.makedirs(OUT_DIR, exist_ok=True)
     for view_key, langs in result["views"].items():
         for lang, payload in langs.items():
-            name = f"{view_key}-{lang}.jpg"
-            path = os.path.join(OUT_DIR, name)
-            with open(path, "wb") as fh:
-                fh.write(encode(payload["image"]))
-            log.info("  %-14s %3d KB  %s  captured %s", name,
-                     os.path.getsize(path) // 1024, payload["layer"],
-                     wms.format_iso(payload["captured_at"]))
+            for size in sizes.SIZES:
+                name = f"{result['product_key']}-{view_key}-{lang}-{size.key}.jpg"
+                path = os.path.join(OUT_DIR, name)
+                with open(path, "wb") as fh:
+                    fh.write(encode(size.scale(payload["image"]), quality=size.quality))
+                log.info("  %-40s %3d KB  %s  captured %s", name,
+                         os.path.getsize(path) // 1024, payload["layer"],
+                         wms.format_iso(payload["captured_at"]))
     return 0
 
 
