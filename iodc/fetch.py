@@ -36,7 +36,9 @@ class Frame:
 
 def fetch_frame(layer: str, view, time_dim: wms.TimeDimension,
                 ladder: int = DEFAULT_LADDER, getter=wms.http_get,
-                before=None, max_mean=None, max_clipped=None) -> Frame:
+                before=None, max_mean=None, max_clipped=None,
+                fmt: str = "image/jpeg", transparent: bool = False,
+                lenient: bool = False) -> Frame:
     """Fetch and validate one view of one product. Raises if every slot fails.
 
     ``before`` starts the ladder at a given moment rather than the newest slot.
@@ -44,10 +46,18 @@ def fetch_frame(layer: str, view, time_dim: wms.TimeDimension,
     ``max_mean`` / ``max_clipped`` arm the washed-out ceiling for products that
     can suffer it. They reject the *slot*, so the walk-back doubles as cover for
     one glare-ruined capture inside an otherwise good hour.
+
+    ``lenient`` drops the flatness gates for products whose empty frame is a
+    legitimate answer (a dry rain frame). Structural checks still apply — and
+    so does the byte floor's real job, since an XML error page still fails to
+    decode as an image.
     """
+    relaxations = ({"min_bytes": 400, "min_stddev": 0.0, "min_mean": 0.0}
+                   if lenient else {})
     failures = []
     for when in time_dim.slots_desc(ladder, before=before):
-        url = wms.build_getmap_url(layer, view, when)
+        url = wms.build_getmap_url(layer, view, when, fmt=fmt,
+                                   transparent=transparent)
         try:
             raw = getter(url)
         except Exception as exc:  # network/HTTP failure for this slot
@@ -58,7 +68,8 @@ def fetch_frame(layer: str, view, time_dim: wms.TimeDimension,
 
         try:
             stats = validate_frame(raw, view.size,
-                                   max_mean=max_mean, max_clipped=max_clipped)
+                                   max_mean=max_mean, max_clipped=max_clipped,
+                                   **relaxations)
         except FrameInvalid as exc:
             log.warning("%s/%s @ %s: rejected: %s", layer, view.key,
                         wms.format_iso(when), exc)

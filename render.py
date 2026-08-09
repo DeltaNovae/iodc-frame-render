@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 
 from PIL import Image
 
-from iodc import overlays, products, publish, sizes, storage, storm, validate, wms
+from iodc import overlays, products, publish, rain, sizes, storage, storm, validate, wms
 from iodc.fetch import fetch_frame
 from iodc.views import VIEWS
 
@@ -65,8 +65,11 @@ def render_cycle(when: datetime, force: str | None = None,
         jobs = {"clouds": [products.LOW_SUN_DAY]}
     elif force == "storm":
         jobs = {"storm": [storm.STORM]}
+    elif force == "rain":
+        jobs = {"rain": [rain.RAIN]}
     else:
-        jobs = {"clouds": products.ladder(when), "storm": [storm.STORM]}
+        jobs = {"clouds": products.ladder(when), "storm": [storm.STORM],
+                "rain": [rain.RAIN]}
     for key, rungs in jobs.items():
         log.info("%s ladder for %s: %s", key, wms.format_iso(when),
                  " -> ".join(rung.layer for rung in rungs))
@@ -92,11 +95,17 @@ def render_cycle(when: datetime, force: str | None = None,
             for view in VIEWS.values():
                 frame, used = _fetch_down_the_ladder(caps, rungs, view, before,
                                                      fetched)
-                image = Image.open(io.BytesIO(frame.raw)).convert("RGB")
-                image = _tone(image, used)
+                if used.key == "rain":
+                    # The sandwich: base below the data, labels above it.
+                    image = rain.compose(Image.open(io.BytesIO(frame.raw)), view)
+                else:
+                    image = Image.open(io.BytesIO(frame.raw)).convert("RGB")
+                    image = _tone(image, used)
 
                 for lang in overlays.languages():
-                    overlay = overlays.load(view, lang, used.is_night)
+                    overlay = (overlays.load_light_labels(view, lang)
+                               if used.key == "rain"
+                               else overlays.load(view, lang, used.is_night))
                     composed = image.copy()
                     composed.paste(overlay, (0, 0), overlay)
                     views.setdefault(view.key, {})[lang] = {
@@ -143,9 +152,11 @@ def _fetch_down_the_ladder(caps: bytes, rungs: list, view, before=None,
     """
     problems = []
     for rung in rungs:
-        # The guard is part of the cache key: a frame accepted unguarded must
-        # not satisfy a guarded request that would have rejected it.
-        cache_key = (rung.layer, view.key, before, rung.guard_washed_out)
+        # The whole fetch configuration is the cache key: a frame accepted
+        # under one validation regime or format must not satisfy a request
+        # made under another.
+        cache_key = (rung.layer, view.key, before, rung.guard_washed_out,
+                     rung.wms_format, rung.transparent, rung.lenient)
         if fetched is not None and cache_key in fetched:
             return fetched[cache_key], rung
         dim = wms.parse_time_dimension(caps, rung.layer)
@@ -154,7 +165,9 @@ def _fetch_down_the_ladder(caps: bytes, rungs: list, view, before=None,
             guard = {"max_mean": validate.MAX_MEAN,
                      "max_clipped": validate.MAX_CLIPPED}
         try:
-            frame = fetch_frame(rung.layer, view, dim, before=before, **guard)
+            frame = fetch_frame(rung.layer, view, dim, before=before,
+                                fmt=rung.wms_format, transparent=rung.transparent,
+                                lenient=rung.lenient, **guard)
             if fetched is not None:
                 fetched[cache_key] = frame
             return frame, rung
@@ -247,6 +260,8 @@ def main() -> int:
                     help="the raw-visible rung, unguarded — inspect it directly")
     ap.add_argument("--force-storm", action="store_const", const="storm", dest="force",
                     help="the storm product alone")
+    ap.add_argument("--force-rain", action="store_const", const="rain", dest="force",
+                    help="the rain product alone")
     ap.add_argument("--publish", action="store_true",
                     help="upload to object storage (needs S3_* in the environment)")
     ap.add_argument("--dry-run", metavar="DIR",

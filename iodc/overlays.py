@@ -33,6 +33,10 @@ def _manifest() -> list:
 
 def find(view_key: str, lang: str, night: bool) -> dict:
     for entry in _manifest():
+        # Themed entries (the rain map's light base/labels) share the manifest
+        # but are found by their own lookups below.
+        if entry.get("theme"):
+            continue
         if (entry["view"] == view_key and entry["lang"] == lang
                 and bool(entry["night"]) == night):
             return entry
@@ -41,10 +45,17 @@ def find(view_key: str, lang: str, night: bool) -> dict:
     )
 
 
-def load(view, lang: str, night: bool) -> Image.Image:
-    """Return the overlay for this view/language/time-of-day, or refuse."""
-    entry = find(view.key, lang, night)
+def _find_light(view_key: str, role: str, lang=None) -> dict:
+    for entry in _manifest():
+        if (entry.get("theme") == "light" and entry.get("role") == role
+                and entry["view"] == view_key and entry.get("lang") == lang):
+            return entry
+    raise FileNotFoundError(
+        f"no light-theme {role} for view={view_key} lang={lang}"
+    )
 
+
+def _verified(entry: dict, view) -> Image.Image:
     declared = [float(v) for v in entry["bbox"]]
     actual = [float(view.bbox.min_lat), float(view.bbox.min_lon),
               float(view.bbox.max_lat), float(view.bbox.max_lon)]
@@ -68,5 +79,22 @@ def load(view, lang: str, night: bool) -> Image.Image:
     return image
 
 
+def load(view, lang: str, night: bool) -> Image.Image:
+    """Return the overlay for this view/language/time-of-day, or refuse."""
+    return _verified(find(view.key, lang, night), view)
+
+
+def load_light_base(view) -> Image.Image:
+    """The rain map's opaque stage — sea, land and lines, no text. Carries no
+    language because it carries no words."""
+    return _verified(_find_light(view.key, "base"), view)
+
+
+def load_light_labels(view, lang: str) -> Image.Image:
+    """The rain map's text, drawn ABOVE the data so a rain cell can never make
+    a place name unreadable."""
+    return _verified(_find_light(view.key, "labels", lang), view)
+
+
 def languages() -> list:
-    return sorted({entry["lang"] for entry in _manifest()})
+    return sorted({entry["lang"] for entry in _manifest() if entry.get("lang")})

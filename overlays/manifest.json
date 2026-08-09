@@ -135,6 +135,108 @@
         640,
         640
       ]
+    },
+    {
+      "file": "wide-base-light.png",
+      "view": "wide",
+      "theme": "light",
+      "role": "base",
+      "lang": null,
+      "bbox": [
+        10,
+        80,
+        28,
+        100
+      ],
+      "size": [
+        700,
+        630
+      ]
+    },
+    {
+      "file": "wide-bn-light.png",
+      "view": "wide",
+      "theme": "light",
+      "role": "labels",
+      "lang": "bn",
+      "bbox": [
+        10,
+        80,
+        28,
+        100
+      ],
+      "size": [
+        700,
+        630
+      ]
+    },
+    {
+      "file": "wide-en-light.png",
+      "view": "wide",
+      "theme": "light",
+      "role": "labels",
+      "lang": "en",
+      "bbox": [
+        10,
+        80,
+        28,
+        100
+      ],
+      "size": [
+        700,
+        630
+      ]
+    },
+    {
+      "file": "close-base-light.png",
+      "view": "close",
+      "theme": "light",
+      "role": "base",
+      "lang": null,
+      "bbox": [
+        19,
+        86,
+        28,
+        95
+      ],
+      "size": [
+        640,
+        640
+      ]
+    },
+    {
+      "file": "close-bn-light.png",
+      "view": "close",
+      "theme": "light",
+      "role": "labels",
+      "lang": "bn",
+      "bbox": [
+        19,
+        86,
+        28,
+        95
+      ],
+      "size": [
+        640,
+        640
+      ]
+    },
+    {
+      "file": "close-en-light.png",
+      "view": "close",
+      "theme": "light",
+      "role": "labels",
+      "lang": "en",
+      "bbox": [
+        19,
+        86,
+        28,
+        95
+      ],
+      "size": [
+        640,
+        640
+      ]
     }
   ]
 }

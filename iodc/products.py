@@ -59,6 +59,14 @@ class Product:
     guard_washed_out: bool = False
     #: Brighten before publishing. The raw visible channel is honest but dim.
     brighten: bool = False
+    #: What to ask the WMS for. Rain needs PNG with alpha so the map base can
+    #: show through; everything else takes the cheaper JPEG.
+    wms_format: str = "image/jpeg"
+    transparent: bool = False
+    #: Skip the flatness gates. A dry rain frame is flat, tiny and *correct* —
+    #: rejecting it would walk back to stale rain presented as current, which
+    #: is worse than an honest empty map. Structural checks still apply.
+    lenient: bool = False
 
     @property
     def overlay_suffix(self) -> str:

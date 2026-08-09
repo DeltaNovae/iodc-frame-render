@@ -142,15 +142,21 @@ def parse_time_dimension(capabilities_xml: bytes, layer: str) -> TimeDimension:
     raise ValueError(f"layer {layer!r} not found in capabilities")
 
 
-def build_getmap_url(layer: str, view, when: datetime, base_url: str = WMS_BASE) -> str:
-    """A GetMap request with the capture slot pinned explicitly."""
+def build_getmap_url(layer: str, view, when: datetime, base_url: str = WMS_BASE,
+                     fmt: str = "image/jpeg", transparent: bool = False) -> str:
+    """A GetMap request with the capture slot pinned explicitly.
+
+    `transparent` only means anything with an alpha-capable format — the rain
+    product needs PNG+alpha so its map base can show through.
+    """
     return (
         f"{base_url}?service=WMS&version=1.3.0&request=GetMap"
         f"&layers={layer}&styles=&crs=EPSG:4326"
         f"&bbox={view.bbox.as_wms()}"
         f"&width={view.width}&height={view.height}"
-        f"&format=image/jpeg"
-        f"&TIME={format_iso(when)}"
+        f"&format={fmt}"
+        + ("&transparent=true" if transparent else "")
+        + f"&TIME={format_iso(when)}"
     )
 
 
