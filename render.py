@@ -115,6 +115,11 @@ def render_cycle(when: datetime, force: str | None = None,
                     composed.paste(overlay, (0, 0), overlay)
                     views.setdefault(view.key, {})[lang] = {
                         "image": composed,
+                        # The FULL size additionally carries the in-frame
+                        # legend strip, so a cropped screenshot keeps the
+                        # legend and the attribution. Thumbs stay clean
+                        # previews and loop frames clean motion.
+                        "stamped": _stamp(composed, view, used.key, lang),
                         "captured_at": frame.captured_at,
                         "layer": used.layer,
                     }
@@ -132,6 +137,24 @@ def render_cycle(when: datetime, force: str | None = None,
     if not results["products"]:
         raise RuntimeError("every product failed this cycle")
     return results
+
+
+def _stamp(image, view, product_key: str, lang: str):
+    """The image with its legend strip along the bottom edge.
+
+    A missing strip degrades to the clean image rather than failing the
+    product: the strip is publication polish, and losing a cycle over it
+    would invert the priorities.
+    """
+    try:
+        strip = overlays.load_strip(view, product_key, lang)
+    except (FileNotFoundError, overlays.OverlayMismatch) as exc:
+        log.warning("no legend strip for %s/%s/%s (%s) — publishing clean",
+                    product_key, view.key, lang, exc)
+        return image
+    stamped = image.copy()
+    stamped.paste(strip, (0, image.height - strip.height), strip)
+    return stamped
 
 
 def _tone(image, product):
@@ -215,8 +238,9 @@ def publish_cycle(result: dict, client, target: publish.Target) -> dict:
                 for size in sizes.SIZES:
                     key = publish.frame_key(target.prefix, product_key, view_key,
                                             lang, size.key, captured_at)
-                    body = encode(size.scale(view_payload["image"]),
-                                  quality=size.quality)
+                    source = (view_payload.get("stamped", view_payload["image"])
+                              if size.key == "full" else view_payload["image"])
+                    body = encode(size.scale(source), quality=size.quality)
                     client.put(key, body, publish.CONTENT_TYPE,
                                publish.FRAME_CACHE_CONTROL)
                     log.info("  put %-58s %3d KB", key, len(body) // 1024)
@@ -305,8 +329,10 @@ def _write_local(product_key: str, views: dict) -> None:
             for size in sizes.SIZES:
                 name = f"{product_key}-{view_key}-{lang}-{size.key}.jpg"
                 path = os.path.join(OUT_DIR, name)
+                source = (payload.get("stamped", payload["image"])
+                          if size.key == "full" else payload["image"])
                 with open(path, "wb") as fh:
-                    fh.write(encode(size.scale(payload["image"]), quality=size.quality))
+                    fh.write(encode(size.scale(source), quality=size.quality))
                 log.info("  %-40s %3d KB  %s  captured %s", name,
                          os.path.getsize(path) // 1024, payload["layer"],
                          wms.format_iso(payload["captured_at"]))

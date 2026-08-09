@@ -237,6 +237,160 @@
         640,
         640
       ]
+    },
+    {
+      "file": "wide-clouds-strip.png",
+      "view": "wide",
+      "role": "strip",
+      "product": "clouds",
+      "lang": null,
+      "size": [
+        700,
+        26
+      ]
+    },
+    {
+      "file": "wide-storm-bn-strip.png",
+      "view": "wide",
+      "role": "strip",
+      "product": "storm",
+      "lang": "bn",
+      "size": [
+        700,
+        26
+      ]
+    },
+    {
+      "file": "wide-storm-en-strip.png",
+      "view": "wide",
+      "role": "strip",
+      "product": "storm",
+      "lang": "en",
+      "size": [
+        700,
+        26
+      ]
+    },
+    {
+      "file": "wide-rain-bn-strip.png",
+      "view": "wide",
+      "role": "strip",
+      "product": "rain",
+      "lang": "bn",
+      "size": [
+        700,
+        26
+      ]
+    },
+    {
+      "file": "wide-rain-en-strip.png",
+      "view": "wide",
+      "role": "strip",
+      "product": "rain",
+      "lang": "en",
+      "size": [
+        700,
+        26
+      ]
+    },
+    {
+      "file": "wide-fog-bn-strip.png",
+      "view": "wide",
+      "role": "strip",
+      "product": "fog",
+      "lang": "bn",
+      "size": [
+        700,
+        26
+      ]
+    },
+    {
+      "file": "wide-fog-en-strip.png",
+      "view": "wide",
+      "role": "strip",
+      "product": "fog",
+      "lang": "en",
+      "size": [
+        700,
+        26
+      ]
+    },
+    {
+      "file": "close-clouds-strip.png",
+      "view": "close",
+      "role": "strip",
+      "product": "clouds",
+      "lang": null,
+      "size": [
+        640,
+        26
+      ]
+    },
+    {
+      "file": "close-storm-bn-strip.png",
+      "view": "close",
+      "role": "strip",
+      "product": "storm",
+      "lang": "bn",
+      "size": [
+        640,
+        26
+      ]
+    },
+    {
+      "file": "close-storm-en-strip.png",
+      "view": "close",
+      "role": "strip",
+      "product": "storm",
+      "lang": "en",
+      "size": [
+        640,
+        26
+      ]
+    },
+    {
+      "file": "close-rain-bn-strip.png",
+      "view": "close",
+      "role": "strip",
+      "product": "rain",
+      "lang": "bn",
+      "size": [
+        640,
+        26
+      ]
+    },
+    {
+      "file": "close-rain-en-strip.png",
+      "view": "close",
+      "role": "strip",
+      "product": "rain",
+      "lang": "en",
+      "size": [
+        640,
+        26
+      ]
+    },
+    {
+      "file": "close-fog-bn-strip.png",
+      "view": "close",
+      "role": "strip",
+      "product": "fog",
+      "lang": "bn",
+      "size": [
+        640,
+        26
+      ]
+    },
+    {
+      "file": "close-fog-en-strip.png",
+      "view": "close",
+      "role": "strip",
+      "product": "fog",
+      "lang": "en",
+      "size": [
+        640,
+        26
+      ]
     }
   ]
 }

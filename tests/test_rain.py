@@ -137,3 +137,45 @@ def test_dark_overlays_are_untouched_by_the_themed_manifest():
         for night in (False, True):
             assert overlays.load(view, "bn", night).size == view.size
     assert overlays.languages() == ["bn", "en"]
+
+
+# ── the in-frame legend strips ────────────────────────────────────────────────
+# Baked into the FULL size so a cropped screenshot still carries the legend and
+# the attribution (owner decision, "Plan B"). The Abohawabid mark is absent by
+# design - D-S9 is deferred and only app-neutral content enters this repo.
+
+def test_every_product_has_strips_for_both_views():
+    for view in (WIDE, CLOSE):
+        for product in ("clouds", "storm", "rain", "fog"):
+            strip = overlays.load_strip(view, product, "bn")
+            assert strip.width == view.width
+            assert strip.height < 40      # a band, not a banner
+
+
+def test_language_independent_strips_serve_any_language():
+    a = overlays.load_strip(CLOSE, "clouds", "bn")
+    b = overlays.load_strip(CLOSE, "clouds", "en")
+    assert list(a.getdata()) == list(b.getdata())
+
+
+def test_stamping_touches_only_the_bottom_band():
+    import render
+    frame = rain.compose(rain_frame(CLOSE), CLOSE)
+    stamped = render._stamp(frame, CLOSE, "rain", "bn")
+    strip_h = overlays.load_strip(CLOSE, "rain", "bn").height
+    top = CLOSE.height - strip_h
+    assert list(stamped.crop((0, 0, CLOSE.width, top)).getdata()) == \
+        list(frame.crop((0, 0, CLOSE.width, top)).getdata())
+    assert list(stamped.crop((0, top, CLOSE.width, CLOSE.height)).getdata()) != \
+        list(frame.crop((0, top, CLOSE.width, CLOSE.height)).getdata())
+
+
+def test_a_missing_strip_degrades_to_the_clean_image():
+    import render
+    frame = Image.new("RGB", CLOSE.size, (90, 90, 90))
+    out = render._stamp(frame, CLOSE, "lightning", "bn")
+    assert list(out.getdata()) == list(frame.getdata())
+
+
+def test_no_strip_lang_leaks_into_the_language_list():
+    assert overlays.languages() == ["bn", "en"]

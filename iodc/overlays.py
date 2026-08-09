@@ -96,5 +96,28 @@ def load_light_labels(view, lang: str) -> Image.Image:
     return _verified(_find_light(view.key, "labels", lang), view)
 
 
+def load_strip(view, product: str, lang: str) -> Image.Image:
+    """The in-frame legend strip for one product — chips plus the EUMETSAT
+    attribution, baked so a cropped screenshot still carries both.
+
+    Language-independent strips (clouds: attribution only) are stored with
+    ``lang: null`` and match any request. Verified against the view's WIDTH
+    only: a strip is a bottom-edge band, not a full-frame overlay.
+    """
+    for entry in _manifest():
+        if (entry.get("role") == "strip" and entry["view"] == view.key
+                and entry.get("product") == product
+                and entry.get("lang") in (lang, None)):
+            image = Image.open(os.path.join(OVERLAY_DIR, entry["file"])).convert("RGBA")
+            if image.width != view.width:
+                raise OverlayMismatch(
+                    f"{entry['file']} is {image.width} px wide but the frame is "
+                    f"{view.width} — the strip would not span the bottom edge"
+                )
+            return image
+    raise FileNotFoundError(f"no strip for view={view.key} product={product} lang={lang}")
+
+
 def languages() -> list:
-    return sorted({entry["lang"] for entry in _manifest() if entry.get("lang")})
+    return sorted({entry["lang"] for entry in _manifest()
+                   if entry.get("lang") and entry.get("role") != "strip"})
