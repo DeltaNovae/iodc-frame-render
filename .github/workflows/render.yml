@@ -11,10 +11,18 @@ on:
   # firing renders CYCLES times, sleeping between. The cron is then only asking
   # "start a batch", which throttling can delay but not thin out.
   #
-  # '*/20' rather than '*/15' so a fully honoured schedule still cannot overlap
-  # itself: a batch takes ~16 minutes, comfortably inside 20. If throttling
-  # keeps firings ~40 minutes apart, each one still publishes twice, which
-  # halves the on-screen age rather than leaving it to chance.
+  # A batch is deliberately LONGER than the cron period (~45 min of work against
+  # a 20 min ask). That inversion is the point. Throttling was later measured at
+  # 95 minutes between firings — far worse than the 37 minute median first
+  # sampled — so a batch has to cover a gap it cannot predict. The cron stays
+  # frequent because firings are *dropped*, not queued: asking often is the only
+  # way to be granted one.
+  #
+  # The consequence, accepted knowingly: when GitHub is generous, firings queue
+  # behind the concurrency guard and this workflow runs near-continuously. It is
+  # bounded — one job at a time, never overlapping — and public-repo minutes are
+  # unmetered. Frames arriving on phones an hour and a half old is the worse
+  # outcome of the two.
   schedule:
     - cron: '*/20 * * * *'
   workflow_dispatch:
@@ -36,18 +44,25 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # Four cycles at 14 minutes covers ~45 minutes from a single firing. Sized
+  # against the observed 95-minute throttle gap: it does not close it, but it
+  # turns one publish per gap into four, which is what the on-screen age
+  # actually follows.
+  #
   # A manual dispatch renders once and returns — nobody watching a run wants to
-  # wait out a sleep to see the result. Only the schedule batches.
-  CYCLES: ${{ github.event_name == 'schedule' && 2 || 1 }}
-  # Just under a slot, so a batch finishes well inside its 20-minute window.
+  # wait out three sleeps to see the result. Only the schedule batches.
+  CYCLES: ${{ github.event_name == 'schedule' && 4 || 1 }}
+  # Just under an upstream slot, so cycles track new captures rather than
+  # re-fetching one that has not changed.
   INTERVAL_SECONDS: 840
 
 jobs:
   render:
     runs-on: ubuntu-latest
-    # Covers the whole batch — one cycle plus INTERVAL plus a second cycle —
-    # and still ends before the next scheduled firing.
-    timeout-minutes: 18
+    # Covers the whole batch: four cycles and the three sleeps between them,
+    # ~45 minutes, plus headroom for a slow fetch. A backstop, not a schedule —
+    # overlap is prevented by the concurrency guard, not by this.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
 
