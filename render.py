@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 
 from PIL import Image
 
-from iodc import overlays, products, publish, rain, sizes, storage, storm, validate, wms
+from iodc import fog, overlays, products, publish, rain, sizes, storage, storm, validate, wms
 from iodc.fetch import fetch_frame
 from iodc.views import VIEWS
 
@@ -67,9 +67,11 @@ def render_cycle(when: datetime, force: str | None = None,
         jobs = {"storm": [storm.STORM]}
     elif force == "rain":
         jobs = {"rain": [rain.RAIN]}
+    elif force == "fog":
+        jobs = {"fog": fog.ladder(when)}
     else:
         jobs = {"clouds": products.ladder(when), "storm": [storm.STORM],
-                "rain": [rain.RAIN]}
+                "rain": [rain.RAIN], "fog": fog.ladder(when)}
     for key, rungs in jobs.items():
         log.info("%s ladder for %s: %s", key, wms.format_iso(when),
                  " -> ".join(rung.layer for rung in rungs))
@@ -98,13 +100,16 @@ def render_cycle(when: datetime, force: str | None = None,
                 if used.key == "rain":
                     # The sandwich: base below the data, labels above it.
                     image = rain.compose(Image.open(io.BytesIO(frame.raw)), view)
+                elif used.key == "fog":
+                    image = fog.compose(Image.open(io.BytesIO(frame.raw)), view,
+                                        night=used.layer == "rgb_fog")
                 else:
                     image = Image.open(io.BytesIO(frame.raw)).convert("RGB")
                     image = _tone(image, used)
 
                 for lang in overlays.languages():
                     overlay = (overlays.load_light_labels(view, lang)
-                               if used.key == "rain"
+                               if used.key in ("rain", "fog")
                                else overlays.load(view, lang, used.is_night))
                     composed = image.copy()
                     composed.paste(overlay, (0, 0), overlay)
@@ -262,6 +267,8 @@ def main() -> int:
                     help="the storm product alone")
     ap.add_argument("--force-rain", action="store_const", const="rain", dest="force",
                     help="the rain product alone")
+    ap.add_argument("--force-fog", action="store_const", const="fog", dest="force",
+                    help="the fog product alone")
     ap.add_argument("--publish", action="store_true",
                     help="upload to object storage (needs S3_* in the environment)")
     ap.add_argument("--dry-run", metavar="DIR",
