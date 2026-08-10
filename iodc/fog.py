@@ -37,9 +37,10 @@ Fog is drawn as a CONTINUOUS ramp — thin fog pale, dense fog deep — so the m
 carries density the way the source imagery does. But a two-state map (fog /
 nothing) makes a promise it cannot keep: where thick high cloud lies above,
 the satellite simply cannot see the ground, and painting that as "clear" is the
-dangerous reading § 5.2 warns about. So obscured sky gets its own quiet wash.
-Measured: high cloud covers 34% of an August night frame against 4-5% on the
-calibration nights.
+dangerous reading § 5.2 warns about. So obscured sky gets its own
+marking — a diagonal stipple, because texture reads as *no data* where a tint
+reads as a measurement. Measured: high cloud covers 34% of an August night
+frame against 4-5% on the calibration nights.
 
 ## The blind band, and why declining to answer is the answer
 
@@ -88,8 +89,17 @@ _FOG_THIN = (176, 192, 206)
 _FOG_DENSE = (88, 104, 126)
 _FOG_ALPHA_THIN, _FOG_ALPHA_DENSE = 0.42, 0.88
 
-_OBSCURED = (198, 194, 188)
-_OBSCURED_ALPHA = 0.28
+# Obscured is drawn as a STIPPLE, not a flat tint. Flat, it measured
+# (236,234,230) against clear's (251,250,247) — fifteen levels apart, invisible
+# on a phone in daylight, so "cannot see the ground" read as "clear": exactly
+# the dangerous confusion § 5.2 exists to prevent. Texture is the cartographic
+# convention for *no data*, and it cannot be mistaken for a measurement however
+# the screen is lit.
+_OBSCURED = (150, 143, 132)
+_OBSCURED_ALPHA = 0.45
+#: Diagonal period. Every third pixel along x+y — dense enough to read as a
+#: field at a glance, open enough that the map beneath stays legible.
+_STIPPLE = 3
 
 
 #: Fog switches instruments on its OWN schedule, not the clouds ladder's 12 deg.
@@ -174,7 +184,7 @@ def compose(raw: Image.Image, view, night: bool) -> Image.Image:
                 colour = _mix(_FOG_THIN, _FOG_DENSE, intensity)
                 alpha = _FOG_ALPHA_THIN + (_FOG_ALPHA_DENSE - _FOG_ALPHA_THIN) * intensity
                 dst[x, y] = _mix(dst[x, y], colour, alpha)
-            elif is_obscured(r, g, b):
+            elif is_obscured(r, g, b) and (x + y) % _STIPPLE == 0:
                 # Only where there is no fog signal: real fog under thin high
                 # cloud should read as fog, not as "cannot tell".
                 dst[x, y] = _mix(dst[x, y], _OBSCURED, _OBSCURED_ALPHA)

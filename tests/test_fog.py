@@ -134,16 +134,27 @@ def test_a_clear_frame_publishes_the_bare_map():
     assert list(out.getdata()) == list(base.getdata())
 
 
-def test_obscured_sky_is_washed_but_stays_quieter_than_fog():
-    """It means "no information", not "hazard" — it must never out-shout fog."""
+def test_obscured_sky_is_stippled_so_it_cannot_read_as_clear():
+    """A flat tint measured 15 levels from clear — invisible on a phone in
+    daylight, so "cannot see" read as "clear". Texture is the cartographic
+    convention for no-data and survives any screen."""
+    base = overlays.load_light_base(CLOSE).convert("RGB")
+    obscured = fog.compose(solid((200, 60, 150)), CLOSE, night=True)
+    row = [obscured.getpixel((x, 300)) for x in range(300, 330)]
+    marked = [p for p in row if p != base.getpixel((row.index(p) + 300, 300))]
+    # Some pixels marked, some left bare: that is what makes it a texture.
+    assert len(set(row)) > 1, "obscured must be textured, not a flat wash"
+
+
+def test_obscured_never_out_shouts_fog():
+    """It means "no information", not "hazard"."""
     base = overlays.load_light_base(CLOSE).convert("RGB")
     obscured = fog.compose(solid((200, 60, 150)), CLOSE, night=True)
     dense = fog.compose(solid(night_px(DENSE_FOG_G)), CLOSE, night=True)
-    at = (320, 320)
-    assert obscured.getpixel(at) != base.getpixel(at)          # something drawn
-    # ...but closer to the base than dense fog is.
-    delta = lambda im: sum(abs(im.getpixel(at)[i] - base.getpixel(at)[i]) for i in range(3))
-    assert delta(obscured) < delta(dense)
+    def coverage(im):
+        return sum(1 for x in range(200, 400) for y in range(200, 400)
+                   if im.getpixel((x, y)) != base.getpixel((x, y)))
+    assert coverage(obscured) < coverage(dense)
 
 
 def test_fog_wins_over_obscured_where_both_could_apply():
