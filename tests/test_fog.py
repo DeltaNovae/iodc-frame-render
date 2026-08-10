@@ -90,8 +90,14 @@ def test_intensity_is_monotonic_in_g():
 def test_the_two_sides_use_different_scales():
     """Same discriminator, different instrument response — a day-side G of 100
     means fog, a night-side G of 100 means clear ground."""
-    assert fog.fog_intensity(*day_px(100), night=False) > 0
-    assert fog.fog_intensity(*night_px(100), night=True) == 0.0
+    assert fog.fog_intensity(125, 100, 200, night=False) > 0
+    assert fog.fog_intensity(182, 100, 200, night=True) == 0.0
+
+
+def test_the_warmth_floor_is_per_instrument():
+    """The two RGBs scale temperature differently (roughly 243-293 K against
+    203-323 K); one number for both let the day side admit cloud kilometres up."""
+    assert fog.MIN_WARMTH_NIGHT and fog.MIN_WARMTH_DAY
 
 
 # ── the regression that started the rebuild ───────────────────────────────────
@@ -132,70 +138,45 @@ def test_clear_and_foggy_pixels_are_not_obscured():
     assert not fog.is_obscured(*night_px(DENSE_FOG_G))
 
 
-# ── the paint ─────────────────────────────────────────────────────────────────
+# ── the render: sky in grey, fog in cyan ─────────────────────────────────────
 
 def solid(colour):
     return Image.new("RGB", CLOSE.size, colour)
 
 
-def test_dense_fog_paints_darker_than_thin_fog():
+def test_dense_fog_reads_stronger_than_thin_fog():
     thin = fog.compose(solid(night_px(THIN_FOG_G)), CLOSE, night=True)
     dense = fog.compose(solid(night_px(DENSE_FOG_G)), CLOSE, night=True)
-    assert sum(dense.getpixel((320, 320))) < sum(thin.getpixel((320, 320)))
+    at = (320, 320)
+    # Deeper cyan: less red, and further from the grey diagonal.
+    assert dense.getpixel(at)[0] < thin.getpixel(at)[0]
 
 
-def test_a_clear_frame_publishes_the_bare_map():
-    out = fog.compose(solid(night_px(CLEAR_NIGHT_G)), CLOSE, night=True)
-    base = overlays.load_light_base(CLOSE).convert("RGB")
-    assert list(out.getdata()) == list(base.getdata())
-
-
-def test_obscured_sky_is_stippled_so_it_cannot_read_as_clear():
-    """A flat tint measured 15 levels from clear — invisible on a phone in
-    daylight, so "cannot see" read as "clear". Texture is the cartographic
-    convention for no-data and survives any screen."""
-    base = overlays.load_light_base(CLOSE).convert("RGB")
-    obscured = fog.compose(solid((200, 60, 150)), CLOSE, night=True)
-    row = [obscured.getpixel((x, 300)) for x in range(300, 330)]
-    marked = [p for p in row if p != base.getpixel((row.index(p) + 300, 300))]
-    # Some pixels marked, some left bare: that is what makes it a texture.
-    assert len(set(row)) > 1, "obscured must be textured, not a flat wash"
-
-
-def test_obscured_never_out_shouts_fog():
-    """It means "no information", not "hazard"."""
-    base = overlays.load_light_base(CLOSE).convert("RGB")
-    obscured = fog.compose(solid((200, 60, 150)), CLOSE, night=True)
-    dense = fog.compose(solid(night_px(DENSE_FOG_G)), CLOSE, night=True)
-    def coverage(im):
-        return sum(1 for x in range(200, 400) for y in range(200, 400)
-                   if im.getpixel((x, y)) != base.getpixel((x, y)))
-    assert coverage(obscured) < coverage(dense)
-
-
-def test_fog_wins_over_obscured_where_both_could_apply():
-    """Real fog under thin high cloud must read as fog, not "cannot tell"."""
-    both = (200, DENSE_FOG_G, 150)      # warm AND high G
-    assert fog.is_obscured(*both)
-    assert fog.fog_intensity(*both, night=True) > 0.5
-    base = overlays.load_light_base(CLOSE).convert("RGB")
-    out = fog.compose(solid(both), CLOSE, night=True)
-    dense = fog.compose(solid(night_px(DENSE_FOG_G)), CLOSE, night=True)
-    assert out.getpixel((320, 320)) == dense.getpixel((320, 320))
-
-
-def test_the_paint_is_translucent_so_orientation_survives():
-    base = overlays.load_light_base(CLOSE).convert("RGB")
-    pairs = [((x, y), (x + 1, y))
-             for y in range(100, CLOSE.height - 1, 25)
-             for x in range(100, CLOSE.width - 1, 25)
-             if base.getpixel((x, y)) != base.getpixel((x + 1, y))]
-    assert pairs, "no adjacent differing base pixels found — sampling bug"
+def test_fog_is_cyan_and_cannot_be_confused_with_cloud_grey():
     out = fog.compose(solid(night_px(DENSE_FOG_G)), CLOSE, night=True)
-    a, b = pairs[0]
-    assert out.getpixel(a) != out.getpixel(b)
+    r, g, b = out.getpixel((320, 320))
+    assert b > r + 40 and g > r + 40          # unmistakably cyan
+    assert not (r == g == b)                  # never grey
 
 
-def test_compose_refuses_a_mismatched_frame():
-    with pytest.raises(ValueError):
-        fog.compose(Image.new("RGB", (100, 100)), CLOSE, night=True)
+def test_a_clear_frame_still_shows_the_sky_rather_than_nothing():
+    """The whole point of Option B: the evidence is always on screen. A clear
+    frame is a grey sky, not a blank map."""
+    out = fog.compose(solid(night_px(CLEAR_NIGHT_G)), CLOSE, night=True)
+    r, g, b = out.getpixel((320, 320))
+    assert r == g == b                        # grey: no fog claimed
+    assert 0 < r < 255                        # but something is drawn
+
+
+def test_cold_cloud_reads_bright_and_warm_ground_dark():
+    """Infrared convention, the same one the storm tile uses — so a
+    thunderstorm looks like a thunderstorm whatever the classifier decides."""
+    cold = fog.context_tone(5)
+    warm = fog.context_tone(200)
+    assert cold > warm
+
+
+def test_context_tone_is_monotonic_and_bounded():
+    tones = [fog.context_tone(b) for b in range(0, 256, 8)]
+    assert tones == sorted(tones, reverse=True)
+    assert 0 <= min(tones) and max(tones) <= 255

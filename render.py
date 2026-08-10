@@ -108,9 +108,14 @@ def render_cycle(when: datetime, force: str | None = None,
                     image = _tone(image, used)
 
                 for lang in overlays.languages():
+                    # Rain alone keeps the light map; fog now renders its own
+                    # sky (Option B) and takes the dark overlay like the other
+                    # imagery products.
                     overlay = (overlays.load_light_labels(view, lang)
-                               if used.key in ("rain", "fog")
-                               else overlays.load(view, lang, used.is_night))
+                               if used.key == "rain"
+                               else overlays.load(view, lang,
+                                                  night=used.key in ("fog", "storm")
+                                                  or used.is_night))
                     composed = image.copy()
                     composed.paste(overlay, (0, 0), overlay)
                     views.setdefault(view.key, {})[lang] = {

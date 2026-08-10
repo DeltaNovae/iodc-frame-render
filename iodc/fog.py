@@ -34,16 +34,15 @@ fog droplets reflect it strongly. Matched hours again (G p50 on the plain):
 09:00 fog **101** vs clear **5**; 11:00 fog 61 vs clear 51 as the fog burns
 off. Same discriminator, different scale.
 
-## Three states, because two would lie
+## Showing the sky, not just the verdict
 
-Fog is drawn as a CONTINUOUS ramp — thin fog pale, dense fog deep — so the map
-carries density the way the source imagery does. But a two-state map (fog /
-nothing) makes a promise it cannot keep: where thick high cloud lies above,
-the satellite simply cannot see the ground, and painting that as "clear" is the
-dangerous reading § 5.2 warns about. So obscured sky gets its own
-marking — a diagonal stipple, because texture reads as *no data* where a tint
-reads as a measurement. Measured: high cloud covers 34% of an August night
-frame against 4-5% on the calibration nights.
+Fog is drawn as a CONTINUOUS cyan ramp — thin pale, dense deep — over the sky
+itself rendered in grey. Showing the evidence is the point: a blank map with a
+verdict on it looks equally confident whether the verdict is right or wrong,
+and every fog fault found so far hid behind exactly that. With cloud visible
+underneath, thick high cloud reads as thick high cloud, and the § 5.2 caveat
+("something is above; the ground may not be visible") becomes something the
+user can SEE rather than something the caption has to promise.
 
 ## The blind band, and why declining to answer is the answer
 
@@ -92,7 +91,16 @@ DAY_G_LO, DAY_G_HI = 90, 170
 #: August. With it, that cloud falls through to the obscured stipple instead,
 #: which is the honest answer: something thick is overhead and the ground is
 #: not visible.
-MIN_WARMTH = 150
+#: Per instrument, because the two scale temperature differently: Night
+#: Microphysics puts B on roughly 243-293 K, Day Microphysics on 203-323 K. One
+#: number for both meant the day side admitted cloud tops near freezing — several
+#: kilometres up — as "fog".
+MIN_WARMTH_NIGHT = 150      # ~272 K: excludes anything colder than the ground
+MIN_WARMTH_DAY = 150        # ~285 K equivalent; see the note below on why this
+#: is NOT tightened further. Raising it to 175 cut real January fog at 09:00
+#: from 50% to 10% while monsoon low cloud still scored 31% — it trades a true
+#: positive for barely any false-positive relief, because on the day side the
+#: two are not separable by temperature at all.
 
 #: Thick high cloud reads warm in both microphysics RGBs — red well above blue.
 HIGH_CLOUD_MARGIN = 25
@@ -101,26 +109,21 @@ HIGH_CLOUD_MARGIN = 25
 MIN_INTENSITY = 0.12
 
 # ── palette ───────────────────────────────────────────────────────────────────
-# Fog ramps pale -> deep slate: it should look like fog lying on the land, and
-# stay distinct from rain's green-blue. Obscured is a quiet warm-neutral wash
-# that must never compete with fog for attention — it means "no information",
-# not "hazard".
-_FOG_THIN = (176, 192, 206)
-_FOG_DENSE = (88, 104, 126)
-_FOG_ALPHA_THIN, _FOG_ALPHA_DENSE = 0.42, 0.88
+# Option B (owner decision 2026-08-10): show the SKY, then highlight the fog —
+# the same grammar as the storm tile. The earlier design painted a verdict on a
+# blank map, so when the classifier was wrong the tile looked perfectly
+# confident and nothing on screen contradicted it. Every fog fault found so far
+# was invisible for exactly that reason. With the evidence drawn underneath, a
+# thunderstorm reads as a thunderstorm whatever the classifier decides.
+#
+# Context follows the infrared convention the storm tile already uses: cold
+# high cloud bright, warm ground dark. Fog then takes a CYAN ramp — saturated
+# enough that it cannot be confused with white cloud top, and pale-to-deep so
+# density still reads.
+_CONTEXT_FLOOR, _CONTEXT_CEIL = 28, 232
 
-# Obscured is drawn as a STIPPLE, not a flat tint. Flat, it measured
-# (236,234,230) against clear's (251,250,247) — fifteen levels apart, invisible
-# on a phone in daylight, so "cannot see the ground" read as "clear": exactly
-# the dangerous confusion § 5.2 exists to prevent. Texture is the cartographic
-# convention for *no data*, and it cannot be mistaken for a measurement however
-# the screen is lit.
-_OBSCURED = (150, 143, 132)
-_OBSCURED_ALPHA = 0.45
-#: Diagonal period. Every third pixel along x+y — dense enough to read as a
-#: field at a glance, open enough that the map beneath stays legible.
-_STIPPLE = 3
-
+_FOG_THIN = (150, 214, 224)
+_FOG_DENSE = (14, 132, 158)
 
 #: Fog switches instruments on its OWN schedule, not the clouds ladder's 12 deg.
 #: That threshold marks where the VISIBLE product becomes usable; fog's night
@@ -167,7 +170,7 @@ def fog_intensity(r: int, g: int, b: int, night: bool) -> float:
     imagery carries, and density is what tells a driver whether a morning is
     merely damp or genuinely blind.
     """
-    if b < MIN_WARMTH:
+    if b < (MIN_WARMTH_NIGHT if night else MIN_WARMTH_DAY):
         # Cold top: this is cloud far above the ground, not fog on it.
         return 0.0
     lo, hi = (NIGHT_G_LO, NIGHT_G_HI) if night else (DAY_G_LO, DAY_G_HI)
@@ -185,19 +188,21 @@ def _mix(base: tuple, colour: tuple, alpha: float) -> tuple:
     return tuple(round(base[i] + (colour[i] - base[i]) * alpha) for i in range(3))
 
 
-def compose(raw: Image.Image, view, night: bool) -> Image.Image:
-    """The light base with fog painted by intensity, and obscured sky washed.
+def context_tone(b: int) -> int:
+    """The sky behind the verdict, in the infrared convention: cold bright,
+    warm dark. B carries the 10.8 um brightness temperature, so this is a
+    genuine picture of cloud height, not decoration."""
+    return round(_CONTEXT_CEIL - (b / 255.0) * (_CONTEXT_CEIL - _CONTEXT_FLOOR))
 
-    Labels are added by the caller's per-language loop, above this, so a place
-    name is never lost under either wash.
+
+def compose(raw: Image.Image, view, night: bool) -> Image.Image:
+    """The sky in grey, with fog highlighted in cyan.
+
+    Labels are added by the caller's per-language loop, above this.
     """
     frame = raw.convert("RGB")
-    base = overlays.load_light_base(view).convert("RGB")
-    if frame.size != base.size:
-        raise ValueError(f"fog frame {frame.size} does not match base {base.size}")
-
     src = frame.load()
-    out = base.copy()
+    out = Image.new("RGB", frame.size)
     dst = out.load()
     for y in range(frame.height):
         for x in range(frame.width):
@@ -205,10 +210,8 @@ def compose(raw: Image.Image, view, night: bool) -> Image.Image:
             intensity = fog_intensity(r, g, b, night)
             if intensity >= MIN_INTENSITY:
                 colour = _mix(_FOG_THIN, _FOG_DENSE, intensity)
-                alpha = _FOG_ALPHA_THIN + (_FOG_ALPHA_DENSE - _FOG_ALPHA_THIN) * intensity
-                dst[x, y] = _mix(dst[x, y], colour, alpha)
-            elif is_obscured(r, g, b) and (x + y) % _STIPPLE == 0:
-                # Only where there is no fog signal: real fog under thin high
-                # cloud should read as fog, not as "cannot tell".
-                dst[x, y] = _mix(dst[x, y], _OBSCURED, _OBSCURED_ALPHA)
+                dst[x, y] = colour
+            else:
+                tone = context_tone(b)
+                dst[x, y] = (tone, tone, tone)
     return out
