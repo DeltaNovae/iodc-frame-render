@@ -6,12 +6,14 @@ precipitation-rate product — arrives with its own legible ramp (pale green
 light rain → blue heavy) on a transparent background, so unlike storm there is
 no palette to invent. The work is the sandwich:
 
-    light base (opaque: sea, land, lines)
+    light base (opaque: sea and land FILL only)
       → h63 rain, alpha-composited
-        → labels (dark text, light halo)
+        → lines (coast, borders, divisions)
+          → labels (dark text, light halo)
 
-Labels go ABOVE the data so a rain cell can never make a place name
-unreadable; the base holds nothing that matters if rain covers it.
+Everything a reader navigates by goes ABOVE the data. Labels always did; the
+LINES did not, and a heavy cell over Khulna was painting out the coastline and
+the border with it — the marks that say where you are (owner report).
 
 ## Validation is deliberately lenient
 
@@ -51,4 +53,6 @@ def compose(rain_rgba: Image.Image, view) -> Image.Image:
         # The validator already enforces the frame size; this guards the base.
         raise ValueError(f"rain frame {rain.size} does not match base {base.size}")
     base.paste(rain, (0, 0), rain)
+    lines = overlays.load_light_lines(view)
+    base.paste(lines, (0, 0), lines)
     return base

@@ -85,9 +85,17 @@ def load(view, lang: str, night: bool) -> Image.Image:
 
 
 def load_light_base(view) -> Image.Image:
-    """The rain map's opaque stage — sea, land and lines, no text. Carries no
-    language because it carries no words."""
+    """The rain map's opaque stage — sea and land FILL only. Carries no
+    language because it carries no words, and no line work either: lines have
+    to be drawn above the data, not under it."""
     return _verified(_find_light(view.key, "base"), view)
+
+
+def load_light_lines(view) -> Image.Image:
+    """Coast, borders and division boundaries, transparent, for drawing ABOVE
+    the data. A heavy rain cell was painting over the coastline, taking with it
+    the one mark that tells a reader where they are (owner report)."""
+    return _verified(_find_light(view.key, "lines"), view)
 
 
 def load_light_labels(view, lang: str) -> Image.Image:
