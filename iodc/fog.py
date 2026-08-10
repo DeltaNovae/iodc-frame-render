@@ -15,7 +15,10 @@ scored nothing.
 
 In EUMETSAT Night Microphysics, **G = IR10.8 - IR3.9**, the classic water-cloud
 discriminator: at night fog droplets emit far less at 3.9 um than at 10.8, so G
-lifts. Clear ground keeps both channels close, so G stays low. Measured on the
+lifts. Clear ground keeps both channels close, so G stays low. But G alone says
+only "water cloud" — **B** (the 10.8 um brightness temperature) says how HIGH,
+and fog by definition lies on the ground. Both are required; see [MIN_WARMTH]
+for what happened when only G was used. Measured on the
 Ganges plain at matched hours (fog night = 2026-01-07, clear night =
 2026-02-10):
 
@@ -73,6 +76,23 @@ FOG_DAY = Product("rgb_microphysics", is_night=False, key="fog")
 NIGHT_G_LO, NIGHT_G_HI = 118, 175
 # Day: clear ground stays under ~70; fog runs 100+.
 DAY_G_LO, DAY_G_HI = 90, 170
+
+#: Fog lies ON THE GROUND, so its top is WARM. B carries the 10.8 um brightness
+#: temperature, and that is the half of the reading the first rebuild missed:
+#: G alone says "water cloud", not "low". Measured —
+#:
+#:     region                       G     B
+#:     January fog, Ganges plain   124   200   <- warm: on the ground
+#:     clear ground                  6   168   <- warm, but no cloud signal
+#:     August convection, Sylhet   248     2   <- freezing: tops kilometres up
+#:     August convection, Bay      184     5
+#:
+#: Without the warmth floor, monsoon thunderstorm tops saturate G and paint as
+#: dense fog — which is what shipped, and what the owner caught at 03:15 BST in
+#: August. With it, that cloud falls through to the obscured stipple instead,
+#: which is the honest answer: something thick is overhead and the ground is
+#: not visible.
+MIN_WARMTH = 150
 
 #: Thick high cloud reads warm in both microphysics RGBs — red well above blue.
 HIGH_CLOUD_MARGIN = 25
@@ -147,6 +167,9 @@ def fog_intensity(r: int, g: int, b: int, night: bool) -> float:
     imagery carries, and density is what tells a driver whether a morning is
     merely damp or genuinely blind.
     """
+    if b < MIN_WARMTH:
+        # Cold top: this is cloud far above the ground, not fog on it.
+        return 0.0
     lo, hi = (NIGHT_G_LO, NIGHT_G_HI) if night else (DAY_G_LO, DAY_G_HI)
     if g <= lo:
         return 0.0

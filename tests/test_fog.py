@@ -104,6 +104,22 @@ def test_a_sunlit_magenta_frame_is_not_read_as_fog():
     assert fog.fog_intensity(*sunrise_magenta, night=True) == 0.0
 
 
+def test_deep_convection_is_not_fog_however_strong_its_cloud_signal():
+    """The owner-caught bug: August thunderstorm tops saturate G (248) but sit
+    at B=2 — freezing, kilometres up. Fog is on the ground and therefore warm
+    (B=200 on the January event)."""
+    convection = (143, 248, 3)
+    assert fog.fog_intensity(*convection, night=True) == 0.0
+    # ...and it routes to the honest answer instead.
+    assert fog.is_obscured(*convection)
+
+
+def test_warm_cloud_at_the_same_g_still_reads_as_fog():
+    """The discriminator is temperature, not the cloud signal itself."""
+    warm = (143, 248, 200)
+    assert fog.fog_intensity(*warm, night=True) > 0.9
+
+
 # ── the third state ───────────────────────────────────────────────────────────
 
 def test_thick_high_cloud_is_flagged_obscured():
