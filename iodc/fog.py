@@ -41,10 +41,18 @@ dangerous reading § 5.2 warns about. So obscured sky gets its own quiet wash.
 Measured: high cloud covers 34% of an August night frame against 4-5% on the
 calibration nights.
 
-Residuals on the record: the day/night switch is inherited from the clouds
-ladder rather than derived, so the terminator hour is approximate; thin cirrus
-can still tint the day signature; and December is the first real-world test —
-the archive built this, winter proves it.
+## The blind band, and why declining to answer is the answer
+
+Fog switches instruments on its own schedule, NOT the clouds ladder's 12 deg —
+see [FOG_NIGHT_MAX_ELEVATION]. Between sunrise and roughly 8 deg neither recipe
+can be trusted, so the ladder returns nothing and `carry_forward` keeps the last
+good assessment at its true capture time. That band sits inside the peak hazard
+hour, which is exactly why it must not be papered over with a guess.
+
+Residuals on the record: thin cirrus can still tint the day signature; the
+obscured wash marks thick high cloud but cannot rule out thin cloud hiding fog;
+and December is the first real-world test — the archive built this, winter
+proves it.
 """
 
 from __future__ import annotations
@@ -84,13 +92,42 @@ _OBSCURED = (198, 194, 188)
 _OBSCURED_ALPHA = 0.28
 
 
+#: Fog switches instruments on its OWN schedule, not the clouds ladder's 12 deg.
+#: That threshold marks where the VISIBLE product becomes usable; fog's night
+#: recipe dies far earlier, the moment sunlight touches the 3.9 um channel.
+#: Walked across the January fog morning, plain-box hit rate:
+#:
+#:     BST     sun    night-instr   day-instr
+#:     06:30  -3.4        64.4%       (dark)
+#:     07:00  +2.8         2.1%        85.2%   <- but 92% on a CLEAR morning
+#:     07:30  +8.9         0.0%        82.1%   <- and 2.9% clear: trustworthy
+#:
+#: So the night recipe is good below the horizon, the day recipe only once the
+#: sun is properly up, and BETWEEN them neither is: the night one has gone
+#: blind while the day one still cries fog on a clear sky.
+FOG_NIGHT_MAX_ELEVATION = 0.0
+FOG_DAY_MIN_ELEVATION = 8.0
+
+
 def ladder(when: datetime) -> list:
-    """One rung per side of the terminator. No fallback chain: if the side's
-    instrument fails, the product skips this cycle and carry_forward keeps the
-    last good assessment."""
-    if solar.is_daylight(*DECISION_POINT, when):
+    """The usable instrument, or NOTHING during the blind band around sunrise.
+
+    Returning an empty ladder is a deliberate answer, not a gap: the product
+    skips the cycle, `carry_forward` keeps the last good assessment, and the
+    frame carries its true (slightly older) capture time so the app's own
+    staleness label stays honest. Radiation fog does not vanish in the forty
+    minutes it takes the sun to clear 8 degrees, so yesterday-minute fog is a
+    better answer than either instrument's guess — and far better than the
+    false "clear" the day recipe would print.
+
+    The band is symmetric at dusk, where the same two instruments swap back.
+    """
+    elevation = solar.solar_elevation(*DECISION_POINT, when)
+    if elevation <= FOG_NIGHT_MAX_ELEVATION:
+        return [FOG_NIGHT]
+    if elevation >= FOG_DAY_MIN_ELEVATION:
         return [FOG_DAY]
-    return [FOG_NIGHT]
+    return []
 
 
 def fog_intensity(r: int, g: int, b: int, night: bool) -> float:

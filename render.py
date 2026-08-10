@@ -178,6 +178,11 @@ def _fetch_down_the_ladder(caps: bytes, rungs: list, view, before=None,
     reason, because "which rung did this morning land on, and why" is the
     question this design will actually be asked.
     """
+    if not rungs:
+        # A product may decline to answer this cycle — fog does so in the
+        # blind band around sunrise. carry_forward keeps its last good frame.
+        raise RuntimeError(f"no usable instrument for {view.key} at this hour")
+
     problems = []
     for rung in rungs:
         # The whole fetch configuration is the cache key: a frame accepted

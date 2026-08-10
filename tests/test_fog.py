@@ -40,9 +40,26 @@ def test_night_rides_night_microphysics_and_day_rides_day():
     from datetime import datetime, timezone
     night = datetime(2026, 1, 6, 22, 0, tzinfo=timezone.utc)   # 04:00 BST, dark
     noon = datetime(2026, 1, 7, 6, 0, tzinfo=timezone.utc)     # 12:00 BST
-    assert not solar.is_daylight(*DECISION_POINT, night)
     assert fog.ladder(night) == [fog.FOG_NIGHT]
     assert fog.ladder(noon) == [fog.FOG_DAY]
+
+
+def test_fog_declines_to_answer_in_the_blind_band_around_sunrise():
+    """Measured: at sun +2.8 deg the night recipe has gone blind (2.1%) while
+    the day recipe still calls a CLEAR morning 92% fog. Neither may speak, so
+    the product skips and carry_forward keeps the last good assessment."""
+    from datetime import datetime, timezone
+    band = datetime(2026, 1, 7, 1, 0, tzinfo=timezone.utc)     # 07:00 BST
+    elevation = solar.solar_elevation(*DECISION_POINT, band)
+    assert fog.FOG_NIGHT_MAX_ELEVATION < elevation < fog.FOG_DAY_MIN_ELEVATION
+    assert fog.ladder(band) == []
+
+
+def test_fog_switches_earlier_than_the_clouds_ladder():
+    """The clouds ladder's 12 deg marks where the VISIBLE product works; fog's
+    night recipe dies at sunrise. Binding them together blinded the tile
+    across the peak hazard hour."""
+    assert fog.FOG_DAY_MIN_ELEVATION < solar.DAYLIGHT_MIN_ELEVATION
 
 
 # ── the signature is G, and it is CONTINUOUS ──────────────────────────────────
