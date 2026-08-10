@@ -1,34 +1,50 @@
-"""The fog product: where fog is likely, on the light map.
+"""The fog product: how much fog, not merely whether — on the light map.
 
-Fog needs TWO instruments because no single recipe survives the day:
+## What went wrong the first time, and how the data said so
 
-  * **night** — `rgb_fog` (Night Microphysics). Fog and low stratus read
-    magenta: R and B strong, G suppressed. Calibrated against real archives:
-    the 2026-01-07 dense-fog dawn classified 86.5% of the close frame, a clear
-    February night 2.7%.
-  * **day** — `rgb_microphysics` (Day Microphysics). The 3.9 µm channel rides
-    in G, and small fog droplets reflect it strongly, so fog reads PALE with G
-    close to R. Same fog morning at 08:30: 54.8% of the Ganges-plain box; the
-    clear morning: 0.0%.
+The first classifier keyed on a MAGENTA signature and was "calibrated" by
+comparing a January fog morning at 07:30 against a clear February night. That
+compared **sunlit against dark**, not fog against no-fog: magenta is what the
+3.9 um channel does when the sun touches it, so the test was a sunrise
+detector. Held at a fixed hour, the same January fog scored 1.0% at 04:00 and
+99.8% at 07:30 — the fog had not changed, the sun had. Consequence in
+production: monsoon dawns painted speckled fake fog, and real deep-night fog
+scored nothing.
 
-**Why the split is load-bearing:** the night recipe in daylight is garbage —
-the clear February *day* classified 65% "fog" at 09:00, pure solar
-contamination of the 3.9 µm channel. And the hazard window (05:00–09:00,
-winter mornings, highway drivers) straddles sunrise, so gating fog out of
-daylight would blind the tile at its peak hour. The switch rides the same
-solar-elevation decision the clouds ladder uses.
+## The signature that is actually physical
 
-The paint is a translucent slate blanket on the light map — fog-coloured over
-a light stage, distinct from rain's green-blue. Confidence is not graded:
-this is an advisory product (কুয়াশার সম্ভাবনা), and the app-side disclaimer
-carries the honesty about what a satellite cannot see (ground fog vs low
-cloud; anything under high cloud).
+In EUMETSAT Night Microphysics, **G = IR10.8 - IR3.9**, the classic water-cloud
+discriminator: at night fog droplets emit far less at 3.9 um than at 10.8, so G
+lifts. Clear ground keeps both channels close, so G stays low. Measured on the
+Ganges plain at matched hours (fog night = 2026-01-07, clear night =
+2026-02-10):
 
-Accepted residuals, on the record: thin daytime cirrus can brush the day
-classifier's pale test; the terminator band (~sun 8–15°) is marginal for both
-recipes and the 12° switch point is inherited from the clouds ladder rather
-than derived; and the first real-world validation is December — the archive
-built this, winter proves it.
+    G p90        22:00   01:00   04:00
+    fog night      120     133     169     <- radiation fog thickening overnight
+    clear night    116     113     109     <- flat, as clear ground should be
+
+That rise through the night is the physics of radiation fog, and it is why G is
+also the right quantity for INTENSITY rather than a yes/no.
+
+Day frames ride `rgb_microphysics`, where the same 3.9 um channel sits in G and
+fog droplets reflect it strongly. Matched hours again (G p50 on the plain):
+09:00 fog **101** vs clear **5**; 11:00 fog 61 vs clear 51 as the fog burns
+off. Same discriminator, different scale.
+
+## Three states, because two would lie
+
+Fog is drawn as a CONTINUOUS ramp — thin fog pale, dense fog deep — so the map
+carries density the way the source imagery does. But a two-state map (fog /
+nothing) makes a promise it cannot keep: where thick high cloud lies above,
+the satellite simply cannot see the ground, and painting that as "clear" is the
+dangerous reading § 5.2 warns about. So obscured sky gets its own quiet wash.
+Measured: high cloud covers 34% of an August night frame against 4-5% on the
+calibration nights.
+
+Residuals on the record: the day/night switch is inherited from the clouds
+ladder rather than derived, so the terminator hour is approximate; thin cirrus
+can still tint the day signature; and December is the first real-world test —
+the archive built this, winter proves it.
 """
 
 from __future__ import annotations
@@ -43,10 +59,29 @@ from .products import DECISION_POINT, Product
 FOG_NIGHT = Product("rgb_fog", is_night=False, key="fog")
 FOG_DAY = Product("rgb_microphysics", is_night=False, key="fog")
 
-#: The slate blanket. Deliberately fog-coloured — grey with a cool cast — so
-#: the tile literally looks like fog lying on the map.
-_PAINT = (138, 149, 164)
-_ALPHA = 0.55
+# ── where the ramp starts and saturates, per side (measured above) ────────────
+# Night: clear ground tops out near 110; dense fog reaches 170+.
+NIGHT_G_LO, NIGHT_G_HI = 118, 175
+# Day: clear ground stays under ~70; fog runs 100+.
+DAY_G_LO, DAY_G_HI = 90, 170
+
+#: Thick high cloud reads warm in both microphysics RGBs — red well above blue.
+HIGH_CLOUD_MARGIN = 25
+
+#: Below this the signal is noise, not thin fog; painting it would speckle.
+MIN_INTENSITY = 0.12
+
+# ── palette ───────────────────────────────────────────────────────────────────
+# Fog ramps pale -> deep slate: it should look like fog lying on the land, and
+# stay distinct from rain's green-blue. Obscured is a quiet warm-neutral wash
+# that must never compete with fog for attention — it means "no information",
+# not "hazard".
+_FOG_THIN = (176, 192, 206)
+_FOG_DENSE = (88, 104, 126)
+_FOG_ALPHA_THIN, _FOG_ALPHA_DENSE = 0.42, 0.88
+
+_OBSCURED = (198, 194, 188)
+_OBSCURED_ALPHA = 0.28
 
 
 def ladder(when: datetime) -> list:
@@ -58,36 +93,52 @@ def ladder(when: datetime) -> list:
     return [FOG_NIGHT]
 
 
-def is_fog_night(r: int, g: int, b: int) -> bool:
-    """Magenta: strong R and B, suppressed G."""
-    return r >= 90 and b >= 110 and g <= 0.45 * r and b >= 0.75 * r
+def fog_intensity(r: int, g: int, b: int, night: bool) -> float:
+    """0 = no fog signal, 1 = as dense as the scale goes.
+
+    Continuous on purpose: a binary answer throws away the density the source
+    imagery carries, and density is what tells a driver whether a morning is
+    merely damp or genuinely blind.
+    """
+    lo, hi = (NIGHT_G_LO, NIGHT_G_HI) if night else (DAY_G_LO, DAY_G_HI)
+    if g <= lo:
+        return 0.0
+    return min(1.0, (g - lo) / float(hi - lo))
 
 
-def is_fog_day(r: int, g: int, b: int) -> bool:
-    """Pale with strong 3.9 µm reflectance (G near R, nothing dark)."""
-    return g >= 110 and r >= 110 and g >= 0.75 * r and min(r, g, b) >= 90
+def is_obscured(r: int, g: int, b: int) -> bool:
+    """Thick high cloud above — whether fog lies beneath is unknowable here."""
+    return r > b + HIGH_CLOUD_MARGIN
+
+
+def _mix(base: tuple, colour: tuple, alpha: float) -> tuple:
+    return tuple(round(base[i] + (colour[i] - base[i]) * alpha) for i in range(3))
 
 
 def compose(raw: Image.Image, view, night: bool) -> Image.Image:
-    """The light base with the detected fog painted on. Labels are added by the
-    caller's per-language loop, above the paint, like every light product."""
+    """The light base with fog painted by intensity, and obscured sky washed.
+
+    Labels are added by the caller's per-language loop, above this, so a place
+    name is never lost under either wash.
+    """
     frame = raw.convert("RGB")
     base = overlays.load_light_base(view).convert("RGB")
     if frame.size != base.size:
         raise ValueError(f"fog frame {frame.size} does not match base {base.size}")
 
-    classify = is_fog_night if night else is_fog_day
     src = frame.load()
     out = base.copy()
     dst = out.load()
-    pr, pg, pb = _PAINT
-    a = _ALPHA
     for y in range(frame.height):
         for x in range(frame.width):
             r, g, b = src[x, y]
-            if classify(r, g, b):
-                br, bg, bb = dst[x, y]
-                dst[x, y] = (round(br + (pr - br) * a),
-                             round(bg + (pg - bg) * a),
-                             round(bb + (pb - bb) * a))
+            intensity = fog_intensity(r, g, b, night)
+            if intensity >= MIN_INTENSITY:
+                colour = _mix(_FOG_THIN, _FOG_DENSE, intensity)
+                alpha = _FOG_ALPHA_THIN + (_FOG_ALPHA_DENSE - _FOG_ALPHA_THIN) * intensity
+                dst[x, y] = _mix(dst[x, y], colour, alpha)
+            elif is_obscured(r, g, b):
+                # Only where there is no fog signal: real fog under thin high
+                # cloud should read as fog, not as "cannot tell".
+                dst[x, y] = _mix(dst[x, y], _OBSCURED, _OBSCURED_ALPHA)
     return out
