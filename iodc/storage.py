@@ -93,7 +93,7 @@ class S3Client:
         them the likeliest reason for a cycle to die: publishing is ~49 calls
         (four products × two views × two languages × three sizes, then the
         pointer), so a per-call blip rate is multiplied by fifty before it
-        reaches the cycle. The fetch side has retried since S1; this is the same
+        reaches the cycle. The fetch side has retried from the start; this is the same
         idea applied to the other end, and it matters more here because a lost
         write also strands the frames already uploaded (see `prunable`).
 

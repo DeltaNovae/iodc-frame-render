@@ -1,7 +1,7 @@
 """The storm product: bands, colouring, and its place beside clouds.
 
 The bands were calibrated against archived events (Cyclone Remal, a
-kalbaishakhi day, an ordinary monsoon afternoon — § 8.11 P1); these tests pin
+kalbaishakhi day, an ordinary monsoon afternoon); these tests pin
 the *behaviour* those numbers bought, not the numbers themselves.
 """
 

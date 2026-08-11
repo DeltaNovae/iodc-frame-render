@@ -1,6 +1,6 @@
 """The rain product: where rain is falling, on a light map.
 
-The opposite grammar to the satellite frames (§ 5.1): the data is sparse
+The opposite grammar to the satellite frames: the data is sparse
 colour, so the map is an empty, light stage for it. `h63` — the ground
 precipitation-rate product — arrives with its own legible ramp (pale green
 light rain → blue heavy) on a transparent background, so unlike storm there is

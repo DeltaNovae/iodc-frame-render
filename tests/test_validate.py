@@ -73,7 +73,7 @@ def test_a_dark_but_structured_frame_is_still_accepted():
 
 # ── the washed-out ceiling ────────────────────────────────────────────────────
 #
-# Cases are the real measurements from the 2026-08-09 daylight sweep (§ 8.10),
+# Cases are the real measurements from the 2026-08-09 daylight sweep,
 # reconstructed as synthetic frames: a contiguous blown-out band over
 # structured mid-tones, sized and toned to reproduce each row's mean and
 # clipped fraction. Contiguous rather than scattered because that is how glare

@@ -141,8 +141,8 @@ def test_dark_overlays_are_untouched_by_the_themed_manifest():
 
 # ── the in-frame legend strips ────────────────────────────────────────────────
 # Baked into the FULL size so a cropped screenshot still carries the legend and
-# the attribution. The app's own mark is absent by
-# design - D-S9 is deferred and only app-neutral content enters this repo.
+# the attribution. Any consumer's own branding is absent by design: only
+# content neutral to whatever displays these frames enters this repository.
 
 def test_every_product_has_strips_for_both_views():
     for view in (WIDE, CLOSE):

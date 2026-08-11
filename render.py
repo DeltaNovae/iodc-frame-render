@@ -35,10 +35,11 @@ from iodc.views import VIEWS
 
 OUT_DIR = os.environ.get("RENDER_OUT", "out")
 
-# Measured at S4 (§ 8.9). Subsampling is the free part: satellite imagery is
-# almost all luminance detail, and a 3× magnified check showed the overlay's
-# thin amber lines and Bengali labels survive 4:2:0 indistinguishably — for a
-# quarter fewer bytes. Quality 78 is the floor before artefacts become visible.
+# Measured when the publish path was tuned. Subsampling is the free part:
+# satellite imagery is almost all luminance detail, and a 3× magnified check
+# showed the overlay's thin amber lines and Bengali labels survive 4:2:0
+# indistinguishably — for a quarter fewer bytes. Quality 78 is the floor before
+# artefacts become visible.
 JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "78"))
 JPEG_SUBSAMPLING = int(os.environ.get("JPEG_SUBSAMPLING", "2"))   # 2 = 4:2:0
 

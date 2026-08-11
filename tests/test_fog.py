@@ -184,7 +184,7 @@ def test_context_tone_is_monotonic_and_bounded():
 
 
 # ── the paleness gate (day side) ──────────────────────────────────────────────
-# Regression cover for a condition that was LOST IN A REFACTOR. The P3
+# Regression cover for a condition that was LOST IN A REFACTOR. The original
 # calibration required fog to be pale (R >= 110); rewriting the test as a
 # continuous ramp kept the G ramp and the warmth floor and dropped R, which
 # stayed a parameter fog_intensity never read. Warm humid monsoon land clears

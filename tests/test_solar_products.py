@@ -55,7 +55,7 @@ def test_night_selects_infrared():
 
 
 def test_the_exact_slot_that_returned_a_black_frame_is_classified_as_night():
-    """17:30 UTC on this date is the live case from S1: the service returned a
+    """17:30 UTC on this date is a real observed case: the service returned a
     valid 4.7 KB all-black JPEG for the visible layer."""
     product = products.ladder(datetime(2026, 8, 8, 17, 30, tzinfo=timezone.utc))[0]
     assert product.layer == products.INFRARED_LAYER

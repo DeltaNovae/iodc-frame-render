@@ -49,7 +49,7 @@ class View:
         return abs(pixel - geo) / geo
 
 
-# Frame sizes were measured, not guessed (§ 8.9). The satellite resolves ~4.5 km
+# Frame sizes were measured, not guessed. The satellite resolves ~4.5 km
 # over Bangladesh, so both views still request more pixels than exist — asking
 # for even more only encodes upscaling artefacts at 2G users' expense.
 #

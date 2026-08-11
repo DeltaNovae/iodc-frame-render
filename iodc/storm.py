@@ -5,7 +5,7 @@ weather, colour is the alert, no legend. In the rendered infrared, grey level
 maps brightness temperature monotonically, so brighter = colder = taller cloud
 tops, and a grey threshold stands in for a cloud-top-temperature threshold.
 
-## The bands, and where they came from (calibrated 2026-08-09, § 8.11 P1)
+## The bands, and where they came from (calibrated 2026-08-09)
 
 Measured against three archived situations rather than picked in the abstract:
 

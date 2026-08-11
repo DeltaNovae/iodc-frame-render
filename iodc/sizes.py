@@ -2,8 +2,8 @@
 
 One image cannot serve all three places it is shown:
 
-  * **full** — the viewer. Detail matters; this is the frame as measured in
-    § 8.9 and nothing about it changes.
+  * **full** — the viewer. Detail matters; this is the frame at its measured
+    native size and nothing about it changes.
   * **thumb** — the Home tile, drawn at ~104 dp. Publishing only `full` meant
     the row downloaded ~85 KB per tile to paint a postage stamp: ~340 KB per
     Home load at four products, on 2G phones.
@@ -60,7 +60,7 @@ LOOP = Size("loop", 320, 72)
 
 SIZES = (FULL, THUMB, LOOP)
 
-#: Ceilings asserted by the budget tests. The full-frame number is § 8.9's; the
-#: other two are what the 2G arithmetic above requires rather than what a
-#: particular day happened to encode to.
+#: Ceilings asserted by the budget tests. The full-frame number is the measured
+#: one; the other two are what the 2G arithmetic above requires rather than what
+#: a particular day happened to encode to.
 BUDGET_BYTES = {FULL.key: 105_000, THUMB.key: 14_000, LOOP.key: 30_000}

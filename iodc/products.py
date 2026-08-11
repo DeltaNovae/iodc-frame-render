@@ -11,7 +11,7 @@ publishes the first rung that survives validation:
   3. `ir108` — infrared, the only thing that sees in the dark. Recoloured so a
      night frame looks like a night sky rather than an instrument trace.
 
-**Why rung 2 exists** (owner-reported 2026-08-09; plan § 8.10): rung 1 divides
+**Why rung 2 exists** (found on a published frame, 2026-08-09): rung 1 divides
 out the solar zenith angle, and near the horizon that divisor tends to zero. At
 07:00 local, half the frame clipped to pure white — a well-formed picture of
 nothing. Raising the daylight threshold could not fix it, because Meteosat-9
@@ -40,7 +40,7 @@ INFRARED_LAYER = "ir108"
 # Where the day/night decision is made. The wide frame spans ~20° of longitude,
 # so near dawn and dusk the terminator crosses it and one edge disagrees with
 # the other; judging at the centre keeps the choice stable and is the accepted
-# v1 simplification (§ 6.1 Q6a).
+# v1 simplification.
 DECISION_POINT = (23.8103, 90.4125)
 
 

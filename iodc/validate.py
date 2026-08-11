@@ -43,7 +43,7 @@ MIN_MEAN = 2.0
 # bright over heavy convection, and a global ceiling would throw those away.
 # Callers pass these explicitly for the one product that needs them.
 #
-# Measured over a full daylight arc on 2026-08-09 (plan § 8.10). The cut sits
+# Measured over a full daylight arc on 2026-08-09. The cut sits
 # where the imagery stops being readable, with clearance either side:
 #
 #     local   sun    mean   250+     verdict

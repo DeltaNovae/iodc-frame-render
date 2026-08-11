@@ -1,7 +1,7 @@
 """Guards on the delivery budget and the resolution reasoning behind it.
 
 These are the promises to a user on a 2G connection. Frame sizes were measured
-rather than guessed (§ 8.9), and it would be easy for a later tweak to quietly
+rather than guessed, and it would be easy for a later tweak to quietly
 undo that — so the reasoning is asserted, not just written down.
 """
 

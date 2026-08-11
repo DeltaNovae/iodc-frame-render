@@ -40,7 +40,7 @@ Fog is drawn as a CONTINUOUS cyan ramp — thin pale, dense deep — over the sk
 itself rendered in grey. Showing the evidence is the point: a blank map with a
 verdict on it looks equally confident whether the verdict is right or wrong,
 and every fog fault found so far hid behind exactly that. With cloud visible
-underneath, thick high cloud reads as thick high cloud, and the § 5.2 caveat
+underneath, thick high cloud reads as thick high cloud, and the standing caveat
 ("something is above; the ground may not be visible") becomes something the
 user can SEE rather than something the caption has to promise.
 
@@ -112,7 +112,7 @@ MIN_WARMTH_DAY = 150        # ~285 K equivalent; see the note below on why this
 #: own. Without this gate the day recipe called 80% of central Bangladesh fog
 #: on an August morning when the visible imagery showed bare ground.
 #:
-#: THIS CONDITION WAS LOST IN A REFACTOR, not omitted by design. The P3
+#: THIS CONDITION WAS LOST IN A REFACTOR, not omitted by design. The original
 #: calibration specified "pale: G>=110, R>=110, G>=0.75R, min>=90"; rewriting
 #: the test as a continuous intensity ramp kept the G ramp and the warmth floor
 #: and silently dropped R, which remained a parameter this function never read.
