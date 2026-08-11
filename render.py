@@ -42,6 +42,14 @@ OUT_DIR = os.environ.get("RENDER_OUT", "out")
 JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "78"))
 JPEG_SUBSAMPLING = int(os.environ.get("JPEG_SUBSAMPLING", "2"))   # 2 = 4:2:0
 
+#: Reference layer for "which slot are we actually about to classify".
+#: `ir108` is the right choice: it is always present, always rendered (no
+#: daylight dependency), and shares the 15-minute grid and ~24-minute latency
+#: of every layer either sun-driven ladder can pick. Rain's `h63` runs ~15
+#: minutes further behind, but rain has no ladder — nothing decides on its
+#: timing, so its extra lag cannot mis-select an instrument.
+DECISION_LAYER = "ir108"
+
 log = logging.getLogger("render")
 
 
@@ -56,7 +64,29 @@ def render_cycle(when: datetime, force: str | None = None,
 
     `force` narrows the cycle to a single branch for eyeballing; nobody
     dispatching --force-night wants storm frames in the way.
+
+    THE LADDERS DECIDE AT THE CAPTURE SLOT, NOT AT `when`. Both sun-driven
+    ladders pick an instrument from the solar elevation, and the frame they
+    then classify is the newest slot upstream has published — 24 to 39 minutes
+    older than now. Deciding at `when` applied the wrong instrument to a frame
+    from half an hour earlier: a 12:30Z frame at sun +0.2 deg (the blind band,
+    where fog declines) was classified by the NIGHT recipe because the run
+    happened at 13:00Z with the sun at -6.3 deg. The night recipe scores 2.1%
+    on real dense fog at sun +2.8 deg, so that frame's "no fog" meant nothing.
+
+    The effect is to SHIFT the blind band by half an hour, so it guards the
+    wrong window — and at dawn it fails towards the fog hazard window, which is
+    the one hour this product exists for. Clouds survived the same offset only
+    because its washed-out guard measures every frame and rejects what it
+    cannot use; fog has no such backstop, so nothing caught it.
     """
+    caps = wms.fetch_capabilities()
+
+    # Snap the decision to the frame that will actually be classified. `pinned`
+    # already names a specific instant, so it is its own decision time.
+    decision_at = when if pinned else wms.parse_time_dimension(
+        caps, DECISION_LAYER).latest
+
     if force == "night":
         jobs = {"clouds": [products.NIGHT]}
     elif force == "day":
@@ -68,15 +98,18 @@ def render_cycle(when: datetime, force: str | None = None,
     elif force == "rain":
         jobs = {"rain": [rain.RAIN]}
     elif force == "fog":
-        jobs = {"fog": fog.ladder(when)}
+        jobs = {"fog": fog.ladder(decision_at)}
     else:
-        jobs = {"clouds": products.ladder(when), "storm": [storm.STORM],
-                "rain": [rain.RAIN], "fog": fog.ladder(when)}
+        jobs = {"clouds": products.ladder(decision_at), "storm": [storm.STORM],
+                "rain": [rain.RAIN], "fog": fog.ladder(decision_at)}
+    # Both times are logged: when they diverge by more than a step, that gap is
+    # the thing to look at first.
+    log.info("cycle at %s, deciding for slot %s (%.0f min behind)",
+             wms.format_iso(when), wms.format_iso(decision_at),
+             (when - decision_at).total_seconds() / 60)
     for key, rungs in jobs.items():
-        log.info("%s ladder for %s: %s", key, wms.format_iso(when),
-                 " -> ".join(rung.layer for rung in rungs))
-
-    caps = wms.fetch_capabilities()
+        log.info("%s ladder for %s: %s", key, wms.format_iso(decision_at),
+                 " -> ".join(rung.layer for rung in rungs) or "DECLINES")
 
     # Production renders the newest slot; a pinned instant is only for
     # reproducing a specific moment (the daylight branch cannot be exercised
