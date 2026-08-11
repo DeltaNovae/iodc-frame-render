@@ -161,9 +161,31 @@ def render_cycle(when: datetime, force: str | None = None,
                         "captured_at": frame.captured_at,
                         "layer": used.layer,
                     }
-        except RuntimeError as exc:
-            log.warning("product %s failed this cycle and is skipped: %s",
-                        key, exc)
+        except Exception as exc:
+            # DELIBERATELY BROAD, and the breadth is the point: this boundary
+            # exists so one product cannot take the others down with it, and a
+            # boundary that only catches RuntimeError does not do that.
+            #
+            # Everything raised inside this block is a candidate. The fetch
+            # ladder raises RuntimeError, but `overlays.find` raises
+            # FileNotFoundError, a mismatched overlay raises OverlayMismatch,
+            # and `rain.compose` raises ValueError — none of them a RuntimeError,
+            # all of them fatal to the whole cycle before this widened.
+            #
+            # The failure mode that makes it serious is that those are
+            # DETERMINISTIC. A truncated overlay manifest is not a bad second
+            # that the next cycle survives; it fails identically every fifteen
+            # minutes until someone intervenes, which is exactly the class of
+            # outage this pipeline is built to not have. A cycle that loses one
+            # product and publishes three is a bad afternoon; a cycle that dies
+            # on all four is a dead pipeline.
+            #
+            # Escalation is not lost: `carry_forward` keeps the product's old
+            # pointer, `generatedAtUtc` is recomputed across everything named,
+            # so a product stuck here ages the section's timestamp and trips the
+            # staleness alarm.
+            log.warning("product %s failed this cycle and is skipped: %s: %s",
+                        key, type(exc).__name__, exc)
             continue
         # Assigned only once EVERY view rendered: a product is published whole
         # or not at all, so a half-rendered one never displaces a complete one.

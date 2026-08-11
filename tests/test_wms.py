@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import urllib.request
+
 import pytest
 
 from iodc import wms
@@ -172,6 +174,55 @@ def test_http_get_gives_up_after_the_configured_attempts():
             wms.http_get("https://example.invalid/x", attempts=2, sleep=lambda _: None)
     finally:
         urllib.request.urlopen = original
+
+
+def test_capabilities_delegates_to_the_retrying_fetcher():
+    """The wiring, stated directly.
+
+    `fetch_capabilities` is the first network call of a cycle and was once the
+    only unretried one. Every product depends on it — it is where the capture
+    slots come from — so a single connection reset did not cost one frame, it
+    cost the whole cycle: four products and a thirty-minute hole in a
+    fifteen-minute cadence.
+
+    Note an injected `getter` REPLACES the retry ladder rather than exercising
+    it, so this asserts the delegation and the end-to-end test below asserts the
+    retrying."""
+    seen = {}
+
+    def spy(url, timeout=None):
+        seen["url"] = url
+        return b"<WMS_Capabilities/>"
+
+    out = wms.fetch_capabilities(base_url="https://example.invalid/ows", getter=spy)
+
+    assert out == b"<WMS_Capabilities/>"
+    assert seen["url"].startswith("https://example.invalid/ows?")
+    assert "request=GetCapabilities" in seen["url"]
+    assert "service=WMS" in seen["url"]
+
+
+def test_capabilities_survives_a_transient_failure_end_to_end(monkeypatch):
+    """No injection: whatever the production default reaches for is what runs.
+
+    This is the test that would have failed before the fix — a bare urlopen has
+    no second attempt — and it stays honest because nothing between
+    `fetch_capabilities` and the socket is stubbed out."""
+    calls = {"n": 0}
+
+    def flaky(req, timeout=None):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise OSError("connection reset by peer")
+        return _ctx(b"<WMS_Capabilities/>")
+
+    monkeypatch.setattr(urllib.request, "urlopen", flaky)
+    monkeypatch.setattr(wms._time, "sleep", lambda _: None)   # no real backoff
+
+    out = wms.fetch_capabilities()
+
+    assert out == b"<WMS_Capabilities/>"
+    assert calls["n"] == 2, "capabilities was not retried"
 
 
 class _ctx:

@@ -110,11 +110,23 @@ class TimeDimension:
         return [newest - (self.step * i) for i in range(count)]
 
 
-def fetch_capabilities(base_url: str = WMS_BASE, timeout: int = 60) -> bytes:
+def fetch_capabilities(base_url: str = WMS_BASE, timeout: int = 60,
+                       getter=None) -> bytes:
+    """The service's capabilities document — retried like every other fetch.
+
+    **This is the first network call of a cycle, and it used to be the only
+    unretried one.** Every product depends on it: it is where the capture slots
+    come from, so a single connection reset here did not cost one frame, it cost
+    the entire cycle — all four products, a thirty-minute hole in a fifteen-
+    minute cadence — for a blip that one retry two seconds later would have
+    absorbed.
+
+    Routing it through :func:`http_get` is the whole fix: the same three
+    attempts, the same doubling backoff, and the same refusal to retry a 4xx
+    that a malformed request would only repeat.
+    """
     url = f"{base_url}?service=WMS&version=1.3.0&request=GetCapabilities"
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+    return (getter or http_get)(url, timeout=timeout)
 
 
 def parse_time_dimension(capabilities_xml: bytes, layer: str) -> TimeDimension:

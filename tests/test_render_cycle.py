@@ -114,3 +114,133 @@ def test_a_pinned_instant_is_its_own_decision_time(slot_at, monkeypatch):
     _run(pinned, pinned=True)
 
     assert seen[0] == pinned
+
+
+# ── product isolation ─────────────────────────────────────────────────────────
+#
+# The per-product boundary promises one failing product is skipped while the
+# others still publish. It caught only RuntimeError — and almost nothing raised
+# inside it is one: a missing overlay is FileNotFoundError, a mismatched overlay
+# is OverlayMismatch, a rain/base size disagreement is ValueError. Any of those
+# killed the entire cycle.
+#
+# What makes that serious is that they are DETERMINISTIC. A truncated overlay
+# manifest is not a bad second the next cycle survives; it fails identically
+# every fifteen minutes until a human intervenes, which is the one failure class
+# this pipeline is built not to have.
+
+
+class _FakeImage:
+    """Stands in for a PIL image everywhere the cycle touches one."""
+    size = (640, 640)
+    width, height = 640, 640
+
+    def convert(self, mode):
+        return self
+
+    def copy(self):
+        return self
+
+    def paste(self, *a, **k):
+        pass
+
+
+class _FakeFrame:
+    def __init__(self, at):
+        self.captured_at = at
+        self.raw = b""
+
+
+#: A deep-night slot, so all four products have an instrument and the cycle is
+#: at full width. 12:30Z would put fog in its blind band, and a product that
+#: declines on its own is not the thing these tests are about.
+NIGHT_SLOT = datetime(2026, 8, 11, 20, 0, tzinfo=timezone.utc)   # 02:00 BST
+NIGHT_RUN = datetime(2026, 8, 11, 20, 30, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def cycle(monkeypatch):
+    """A full four-product cycle with every image operation stubbed.
+
+    Everything the cycle can touch is stubbed — rain's and fog's own compose
+    paths and the light-theme overlays included — so the ONLY failure in a test
+    is the one that test injects. An earlier version left the rain overlays real
+    and its assertions were partly satisfied by the harness's own errors being
+    caught, which proves nothing about the code under test.
+    """
+    monkeypatch.setattr(render.wms, "fetch_capabilities", lambda *a, **k: b"<caps/>")
+    dim = wms.TimeDimension("ir108", NIGHT_SLOT - timedelta(days=1), NIGHT_SLOT,
+                            timedelta(minutes=15), NIGHT_SLOT)
+    monkeypatch.setattr(render.wms, "parse_time_dimension", lambda *a, **k: dim)
+
+    monkeypatch.setattr(render.Image, "open", lambda *a, **k: _FakeImage())
+    monkeypatch.setattr(render, "_tone", lambda image, product: image)
+    monkeypatch.setattr(render, "_stamp", lambda image, *a, **k: image)
+    monkeypatch.setattr(render.rain, "compose", lambda raw, view: _FakeImage())
+    monkeypatch.setattr(render.fog, "compose",
+                        lambda raw, view, night: _FakeImage())
+    monkeypatch.setattr(render.overlays, "languages", lambda: ["bn"])
+    monkeypatch.setattr(render.overlays, "load", lambda *a, **k: _FakeImage())
+    monkeypatch.setattr(render.overlays, "load_light_labels",
+                        lambda *a, **k: _FakeImage())
+
+    def _install(failure, failing_product=None):
+        """Raise `failure` from the named product's fetch — or from all of them
+        when `failing_product` is None."""
+        def fake_fetch(caps, rungs, view, before=None, fetched=None):
+            if not rungs:
+                # Faithful to the real function: an empty ladder is a decline.
+                raise RuntimeError(f"no usable instrument for {view.key}")
+            if failing_product is None or rungs[0].key == failing_product:
+                raise failure
+            return _FakeFrame(NIGHT_SLOT), rungs[0]
+        monkeypatch.setattr(render, "_fetch_down_the_ladder", fake_fetch)
+
+    return _install
+
+
+@pytest.mark.parametrize("failure", [
+    FileNotFoundError("no overlay for view=wide lang=bn night=False"),
+    ValueError("rain frame (700, 630) does not match base (640, 640)"),
+    KeyError("close"),
+    RuntimeError("no usable frame in the newest 4 slots"),
+])
+def test_one_product_failing_leaves_the_others_published(cycle, failure):
+    """Whatever a product raises, every other product still publishes.
+
+    Parameterised over the exception types actually reachable inside that
+    block. Only the last of them was caught before this widened."""
+    cycle(failure, failing_product="rain")
+
+    result = render.render_cycle(NIGHT_RUN)
+
+    published = set(result["products"])
+    assert "rain" not in published, "the injected failure did not take effect"
+    assert published == {"clouds", "storm", "fog"}, (
+        f"{type(failure).__name__} cost more than the product that raised it: "
+        f"published {sorted(published)}"
+    )
+
+
+def test_an_overlay_mismatch_is_survivable(cycle):
+    """The deterministic case spelled out: a wrong-bbox overlay fails the same
+    way on every future cycle, so failing the whole run turns one bad committed
+    asset into a total outage instead of one missing tile."""
+    from iodc.overlays import OverlayMismatch
+
+    cycle(OverlayMismatch("drawn for bbox [10,80,28,100], frame covers [19,86,28,95]"),
+          failing_product="storm")
+
+    result = render.render_cycle(NIGHT_RUN)
+
+    assert set(result["products"]) == {"clouds", "rain", "fog"}
+
+
+def test_every_product_failing_still_raises(cycle):
+    """The boundary must not swallow a total failure into a silent success:
+    publishing nothing has to be an error the workflow can see, or a dead
+    pipeline would report green."""
+    cycle(FileNotFoundError("overlays directory is empty"))
+
+    with pytest.raises(RuntimeError, match="every product failed"):
+        render.render_cycle(NIGHT_RUN)
