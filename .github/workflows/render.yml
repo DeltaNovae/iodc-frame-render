@@ -1,30 +1,29 @@
 name: render
 
 on:
-  # Upstream produces a slot every 15 minutes, so that is the cadence worth
-  # having — but **the schedule cannot deliver it**. Measured over 15 hours,
-  # a '*/15' cron fired a median of 37 minutes apart (mean 44, worst 103) with
-  # zero failures: GitHub throttles scheduled workflows on shared runners and
-  # simply drops firings. Frames were reaching phones 30-100 minutes old.
+  # THE PRIMARY TRIGGER IS NO LONGER HERE. A Cloudflare Worker fires
+  # workflow_dispatch every 15 minutes, because GitHub's scheduler cannot hold
+  # a cadence: measured against a 20-minute cron, gaps of 33 / 62 / 129 minutes
+  # plus two separate 99-minute idles inside one day. Firings are *dropped*,
+  # not queued, so asking more often does not help.
   #
-  # So the frequency comes from inside the run, not from the scheduler: each
-  # firing renders CYCLES times, sleeping between. The cron is then only asking
-  # "start a batch", which throttling can delay but not thin out.
+  # That raggedness is exactly what the four-cycle batch existed to paper over
+  # — one run publishing four frames fourteen minutes apart, holding a runner
+  # for a median of 47 minutes to cover a gap it could not predict. With a
+  # trigger that keeps time, a run is one cycle and roughly three minutes,
+  # which also means a broken render surfaces in minutes rather than after a
+  # whole batch has published with it.
   #
-  # A batch is deliberately LONGER than the cron period (~45 min of work against
-  # a 20 min ask). That inversion is the point. Throttling was later measured at
-  # 95 minutes between firings — far worse than the 37 minute median first
-  # sampled — so a batch has to cover a gap it cannot predict. The cron stays
-  # frequent because firings are *dropped*, not queued: asking often is the only
-  # way to be granted one.
+  # This schedule stays as a FALLBACK. If the Worker dies, publishing degrades
+  # to hourly instead of stopping — and a *scheduled* firing still takes the
+  # batch (CYCLES keys on event_name below), so an outage yields a usable
+  # spread of frames rather than one lonely frame per hour.
   #
-  # The consequence, accepted knowingly: when GitHub is generous, firings queue
-  # behind the concurrency guard and this workflow runs near-continuously. It is
-  # bounded — one job at a time, never overlapping — and public-repo minutes are
-  # unmetered. Frames arriving on phones an hour and a half old is the worse
-  # outcome of the two.
+  # ⚠️ A dead Worker is therefore NOT loudly visible: hourly frames will not
+  # trip the 2-hour staleness alarm. Before the loop depends on this cadence,
+  # tighten that alarm to match the cadence actually expected.
   schedule:
-    - cron: '*/20 * * * *'
+    - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
       force:
@@ -44,13 +43,15 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Four cycles at 14 minutes covers ~45 minutes from a single firing. Sized
-  # against the observed 95-minute throttle gap: it does not close it, but it
-  # turns one publish per gap into four, which is what the on-screen age
-  # actually follows.
+  # The normal path is now ONE cycle: the Cloudflare trigger fires every 15
+  # minutes, so a run renders the newest slot and returns in ~3 minutes. That
+  # is also why a bad render is now visible almost immediately instead of after
+  # a whole batch has published with it.
   #
-  # A manual dispatch renders once and returns — nobody watching a run wants to
-  # wait out three sleeps to see the result. Only the schedule batches.
+  # Batching survives for the FALLBACK only. A `schedule` firing means the
+  # Worker is not calling — hourly — so four cycles at 14 minutes turn one
+  # lonely frame per hour into ~45 minutes of usable spread. Same expression as
+  # before; what changed is which branch is the exception.
   CYCLES: ${{ github.event_name == 'schedule' && 4 || 1 }}
   # Just under an upstream slot, so cycles track new captures rather than
   # re-fetching one that has not changed.
