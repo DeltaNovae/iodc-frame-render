@@ -126,8 +126,19 @@ def build_meta(prefix: str, products: dict, history: dict) -> dict:
             }
         all_captures.extend(entries.values())
         out_products[product_key] = {
-            # Which rung of the ladder produced this set, and the upstream layer
-            # behind it — both for diagnosis, neither for display.
+            # ⚠️ DIAGNOSIS ONLY — and `source` does not mean time of day.
+            #
+            # It reports the RENDERING flag, not the sun. `is_night` selects the
+            # infrared toning and the heavier overlay, so storm carries it around
+            # the clock and reads "night" at noon, while fog's night instrument
+            # is flagged False and reads "day" at 03:00. Both are correct as
+            # rendering facts and wrong as clock facts.
+            #
+            # So nothing user-facing may key on this. A consumer that displayed
+            # "night view" from it would be wrong for two of the four products;
+            # the app had exactly such a field, unused, and it was deleted rather
+            # than wired up. If a real day/night signal is ever needed, publish
+            # the solar state explicitly instead of overloading this one.
             "source": "night" if product.is_night else "day",
             "layer": product.layer,
             "views": views,

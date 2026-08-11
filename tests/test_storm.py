@@ -33,8 +33,12 @@ def test_storm_rides_infrared_so_it_works_around_the_clock():
 
 def test_storm_takes_the_heavy_night_overlay():
     """The base is grey infrared with no coastline of its own — the drawn map
-    is the only orientation there is, same as the night product."""
-    assert storm.STORM.overlay_suffix == "-night"
+    is the only orientation there is, same as the night product.
+
+    Asserted on `is_night`, which is what the cycle actually reads when it picks
+    an overlay. This used to assert a derived `overlay_suffix` property no
+    production code consulted, so it pinned a symbol rather than the behaviour."""
+    assert storm.STORM.is_night
 
 
 # ── the bands ─────────────────────────────────────────────────────────────────

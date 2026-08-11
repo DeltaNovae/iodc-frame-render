@@ -52,10 +52,11 @@ can be trusted, so the ladder returns nothing and `carry_forward` keeps the last
 good assessment at its true capture time. That band sits inside the peak hazard
 hour, which is exactly why it must not be papered over with a guess.
 
-Residuals on the record: thin cirrus can still tint the day signature; the
-obscured wash marks thick high cloud but cannot rule out thin cloud hiding fog;
-and December is the first real-world test — the archive built this, winter
-proves it.
+Residuals on the record: thin cirrus can still tint the day signature; the grey
+context shows thick high cloud but cannot rule out THIN cloud hiding fog
+beneath it, so an unpainted frame is not a promise of clear ground; and
+December is the first real-world test — the archive built this, winter proves
+it.
 """
 
 from __future__ import annotations
@@ -88,9 +89,10 @@ DAY_G_LO, DAY_G_HI = 90, 170
 #:
 #: Without the warmth floor, monsoon thunderstorm tops saturate G and paint as
 #: dense fog — which is what shipped, and what the owner caught at 03:15 BST in
-#: August. With it, that cloud falls through to the obscured stipple instead,
-#: which is the honest answer: something thick is overhead and the ground is
-#: not visible.
+#: August. With it, that cloud is not painted as fog at all: it falls through to
+#: the grey context tone, where a cold top renders BRIGHT and reads as exactly
+#: what it is — thick cloud overhead, ground not visible. Showing the sky rather
+#: than only the verdict is what makes that legible without a third colour.
 #: Per instrument, because the two scale temperature differently: Night
 #: Microphysics puts B on roughly 243-293 K, Day Microphysics on 203-323 K. One
 #: number for both meant the day side admitted cloud tops near freezing — several
@@ -101,9 +103,6 @@ MIN_WARMTH_DAY = 150        # ~285 K equivalent; see the note below on why this
 #: from 50% to 10% while monsoon low cloud still scored 31% — it trades a true
 #: positive for barely any false-positive relief, because on the day side the
 #: two are not separable by temperature at all.
-
-#: Thick high cloud reads warm in both microphysics RGBs — red well above blue.
-HIGH_CLOUD_MARGIN = 25
 
 #: DAY SIDE ONLY: fog must be PALE, and paleness lives in R.
 #:
@@ -210,11 +209,6 @@ def fog_intensity(r: int, g: int, b: int, night: bool) -> float:
     if g <= lo:
         return 0.0
     return min(1.0, (g - lo) / float(hi - lo))
-
-
-def is_obscured(r: int, g: int, b: int) -> bool:
-    """Thick high cloud above — whether fog lies beneath is unknowable here."""
-    return r > b + HIGH_CLOUD_MARGIN
 
 
 def _mix(base: tuple, colour: tuple, alpha: float) -> tuple:

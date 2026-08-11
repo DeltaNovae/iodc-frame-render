@@ -116,8 +116,6 @@ def test_deep_convection_is_not_fog_however_strong_its_cloud_signal():
     (B=200 on the January event)."""
     convection = (143, 248, 3)
     assert fog.fog_intensity(*convection, night=True) == 0.0
-    # ...and it routes to the honest answer instead.
-    assert fog.is_obscured(*convection)
 
 
 def test_warm_cloud_at_the_same_g_still_reads_as_fog():
@@ -126,16 +124,19 @@ def test_warm_cloud_at_the_same_g_still_reads_as_fog():
     assert fog.fog_intensity(*warm, night=True) > 0.9
 
 
-# ── the third state ───────────────────────────────────────────────────────────
+# ── the sky behind the verdict ────────────────────────────────────────────────
+#
+# There is no third CLASSIFIER state: thick high cloud is not flagged, it simply
+# fails the warmth floor and falls through to the grey context, where a cold top
+# renders bright and reads as cloud. That is the whole point of drawing the sky
+# rather than only the verdict — see `context_tone`.
 
-def test_thick_high_cloud_is_flagged_obscured():
-    """34% of an August night frame, against 4-5% on the calibration nights."""
-    assert fog.is_obscured(200, 60, 150)
 
-
-def test_clear_and_foggy_pixels_are_not_obscured():
-    assert not fog.is_obscured(*night_px(CLEAR_NIGHT_G))
-    assert not fog.is_obscured(*night_px(DENSE_FOG_G))
+def test_a_cold_high_top_renders_brighter_than_warm_ground():
+    """The infrared convention, and the reason no separate 'obscured' paint is
+    needed: cold is bright, so thick cloud above already looks like thick cloud
+    above."""
+    assert fog.context_tone(3) > fog.context_tone(200)
 
 
 # ── the render: sky in grey, fog in cyan ─────────────────────────────────────

@@ -68,12 +68,6 @@ class Product:
     #: is worse than an honest empty map. Structural checks still apply.
     lenient: bool = False
 
-    @property
-    def overlay_suffix(self) -> str:
-        """Night overlays carry heavier strokes — infrared has no coastline of
-        its own, so the drawn map is the only orientation there is."""
-        return "-night" if self.is_night else ""
-
 
 COLOUR_DAY = Product(VISIBLE_LAYER, is_night=False, guard_washed_out=True)
 LOW_SUN_DAY = Product(LOW_SUN_LAYER, is_night=False, brighten=True)
@@ -94,17 +88,6 @@ def ladder(when: datetime) -> list:
     if solar.is_daylight(*DECISION_POINT, when):
         return [COLOUR_DAY, LOW_SUN_DAY, NIGHT]
     return [NIGHT]
-
-
-def choose(when: datetime) -> Product:
-    """The preferred product — the first rung. Kept for callers that only need
-    to name the product, such as logging before a fetch is attempted."""
-    return ladder(when)[0]
-
-
-def infrared_fallback() -> Product:
-    """The last rung, by name, for callers forcing the night branch."""
-    return NIGHT
 
 
 # ── low-sun toning ────────────────────────────────────────────────────────────

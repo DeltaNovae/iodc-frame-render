@@ -43,23 +43,21 @@ def test_december_noon_is_lower_than_august_noon():
 # ── product switching ─────────────────────────────────────────────────────────
 
 def test_midday_selects_the_visible_product():
-    product = products.choose(datetime(2026, 8, 8, 6, tzinfo=timezone.utc))
+    product = products.ladder(datetime(2026, 8, 8, 6, tzinfo=timezone.utc))[0]
     assert product.layer == products.VISIBLE_LAYER
     assert not product.is_night
-    assert product.overlay_suffix == ""
 
 
-def test_night_selects_infrared_with_the_heavier_overlay():
-    product = products.choose(datetime(2026, 8, 8, 18, tzinfo=timezone.utc))
+def test_night_selects_infrared():
+    product = products.ladder(datetime(2026, 8, 8, 18, tzinfo=timezone.utc))[0]
     assert product.layer == products.INFRARED_LAYER
     assert product.is_night
-    assert product.overlay_suffix == "-night"
 
 
 def test_the_exact_slot_that_returned_a_black_frame_is_classified_as_night():
     """17:30 UTC on this date is the live case from S1: the service returned a
     valid 4.7 KB all-black JPEG for the visible layer."""
-    product = products.choose(datetime(2026, 8, 8, 17, 30, tzinfo=timezone.utc))
+    product = products.ladder(datetime(2026, 8, 8, 17, 30, tzinfo=timezone.utc))[0]
     assert product.layer == products.INFRARED_LAYER
 
 
@@ -68,12 +66,12 @@ def test_a_barely_risen_sun_still_counts_as_night():
     threshold sits well above sunrise rather than at it."""
     just_up = datetime(2026, 8, 7, 23, 45, tzinfo=timezone.utc)   # ~05:45 BST
     assert 0 < solar.solar_elevation(*DHAKA, just_up) < solar.DAYLIGHT_MIN_ELEVATION
-    assert products.choose(just_up).is_night
+    assert products.ladder(just_up)[0].is_night
 
 
-def test_fallback_is_always_a_usable_product():
-    assert products.infrared_fallback().layer == products.INFRARED_LAYER
-    assert products.infrared_fallback().is_night
+def test_the_last_rung_is_always_a_usable_product():
+    assert products.NIGHT.layer == products.INFRARED_LAYER
+    assert products.NIGHT.is_night
 
 
 # ── night palette ─────────────────────────────────────────────────────────────
@@ -134,10 +132,9 @@ def test_only_the_colour_rung_is_guarded_against_washing_out():
     assert not night.guard_washed_out
 
 
-def test_the_low_sun_rung_is_a_daytime_frame_and_takes_the_day_overlay():
+def test_the_low_sun_rung_is_a_daytime_frame():
     _, low_sun, _ = products.ladder(datetime(2026, 8, 8, 6, tzinfo=timezone.utc))
     assert not low_sun.is_night
-    assert low_sun.overlay_suffix == ""
     assert low_sun.brighten
 
 
