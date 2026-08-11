@@ -5,8 +5,24 @@ name: staleness
 # failure — and that is invisible from the outside, because a dead pipeline
 # still serves its last good frames and looks entirely healthy.
 #
-# The age of the newest capture is the only honest signal, so it gets its own
-# workflow rather than living inside the job whose death it is meant to detect.
+# It gets its own workflow rather than living inside the job whose death it is
+# meant to detect.
+#
+# TWO properties, because a pipeline can fail either while passing the other:
+#
+#   AGE      is the newest capture recent?     catches a pipeline that stopped
+#   SPACING  are captures evenly separated?    catches one that lost its cadence
+#
+# Spacing was added on 2026-08-11 to close a hole age could not see. If the
+# Cloudflare render trigger dies, render.yml's own hourly schedule keeps
+# publishing, so the newest frame stays comfortably inside any age limit and
+# nothing appears wrong — while the loop degrades from smooth motion to a lurch.
+# Age is blind to that by construction; only the gaps between captures show it.
+#
+# Retention is 12 captures, so each run reads the last ~3 hours. Running hourly
+# therefore accumulates a continuous record of the cadence rather than sampling
+# it — the 24-hour gap distribution the trigger's acceptance depends on is a
+# by-product of leaving this alarm switched on.
 
 on:
   schedule:
@@ -16,6 +32,9 @@ on:
       max_age_minutes:
         description: Age at which frames count as stale
         default: '120'
+      max_gap_minutes:
+        description: Spacing between captures at which cadence counts as broken
+        default: '40'
 
 permissions:
   contents: read
@@ -48,7 +67,9 @@ jobs:
           S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
         run: |
-          python verify.py --max-age-minutes "${{ inputs.max_age_minutes || 120 }}" \
+          python verify.py \
+            --max-age-minutes "${{ inputs.max_age_minutes || 120 }}" \
+            --max-gap-minutes "${{ inputs.max_gap_minutes || 40 }}" \
             | tee check.txt
 
       - name: Open or update the tracking issue
@@ -63,11 +84,18 @@ jobs:
             try { detail = '```\n' + fs.readFileSync('check.txt', 'utf8').trim() + '\n```'; } catch (e) {}
 
             const body = [
-              'The newest published capture is older than the staleness limit, or a',
-              'frame named by `meta.json` is missing.',
+              'One of three things is wrong: the newest published capture is older',
+              'than the staleness limit, a frame named by `meta.json` is missing, or',
+              'captures have stopped arriving evenly.',
               '',
               'Readers are still being served the last good frames, so nothing looks',
               'broken from the outside — which is exactly why this check exists.',
+              '',
+              'If the failure is **spacing** rather than age, suspect the Cloudflare',
+              'render trigger first. When it stops firing, the hourly fallback in',
+              '`render.yml` keeps frames fresh while the cadence quietly degrades,',
+              'which is precisely the state age cannot see. That trigger holds a',
+              'token which expires on 2026-11-09.',
               '',
               detail,
               '',

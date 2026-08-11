@@ -238,3 +238,61 @@ def history_from_meta(meta: dict) -> dict:
             views[name] = times
         history[product_key] = views
     return history
+
+
+@dataclass(frozen=True)
+class CadenceGap:
+    """The widest hole in one product's retained capture times."""
+
+    #: Minutes across the widest hole, or `None` when there is nothing to
+    #: measure yet (a bucket holding fewer than two captures).
+    minutes: float | None
+    #: The `view-lang` series the hole was found in.
+    series: str
+    #: The capture the hole follows — the last frame before the silence.
+    after: datetime | None
+    #: How many captures the product retains, for reading the number in context.
+    captures: int
+
+
+def capture_gaps(history: dict) -> dict:
+    """`{product: CadenceGap}` — how evenly each product is actually publishing.
+
+    Freshness and spacing are different failures and only one of them was being
+    watched. A pipeline can be perfectly fresh and still useless to the loop: at
+    the close view's 1.44 km/px a 15-minute gap is ~5-7 px of cloud motion and a
+    60-minute gap is ~20-28 px, so uneven spacing plays as drift, drift, LURCH
+    no matter how recent the newest frame is.
+
+    It is also the only way a dead render trigger becomes visible. If the
+    Cloudflare Worker stops firing, the workflow's own hourly `schedule` keeps
+    publishing, so the newest capture stays comfortably inside any age limit and
+    nothing looks wrong — the cadence just quietly degrades. Spacing is the
+    signal that separates those two states; age cannot.
+
+    Every series of a product is measured, not just one. All four `view-lang`
+    series publish whole-or-nothing at a single capture time, so they *should*
+    be identical; taking the worst across them means a series that has fallen
+    out of step is reported rather than averaged away.
+    """
+    summaries = {}
+    for product_key, views in history.items():
+        ordered_by_series = {
+            name: sorted(set(times)) for name, times in views.items()
+        }
+        captures = max((len(t) for t in ordered_by_series.values()), default=0)
+
+        worst = None
+        for name, ordered in ordered_by_series.items():
+            for earlier, later in zip(ordered, ordered[1:]):
+                minutes = (later - earlier).total_seconds() / 60
+                if worst is None or minutes > worst[0]:
+                    worst = (minutes, name, earlier)
+
+        summaries[product_key] = CadenceGap(
+            minutes=worst[0] if worst else None,
+            series=worst[1] if worst else "",
+            after=worst[2] if worst else None,
+            captures=captures,
+        )
+    return summaries

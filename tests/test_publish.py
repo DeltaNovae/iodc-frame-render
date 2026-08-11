@@ -278,3 +278,122 @@ def test_carry_forward_ignores_a_v1_pointer():
     merged = publish.carry_forward(this_cycle, previous)
 
     assert set(merged["products"]) == {CLOUDS}
+
+
+# ── cadence ───────────────────────────────────────────────────────────────────
+
+def series(*minute_offsets, start=T0):
+    """One `view-lang` series, given as minutes from `start`."""
+    return [start + timedelta(minutes=m) for m in minute_offsets]
+
+
+def product_history(*minute_offsets, start=T0):
+    """A product's four series, all publishing at the same instants — which is
+    what whole-or-nothing publishing actually produces."""
+    return {name: series(*minute_offsets, start=start)
+            for name in ("wide-bn", "wide-en", "close-bn", "close-en")}
+
+
+def test_an_even_fifteen_minute_grid_reports_a_fifteen_minute_gap():
+    """The healthy state, taken from the live pointer on 2026-08-11: twelve
+    captures, 18:00Z to 20:45Z, every one exactly a slot apart."""
+    history = {"storm": product_history(*range(0, 12 * 15, 15))}
+
+    gap = publish.capture_gaps(history)["storm"]
+
+    assert gap.minutes == 15
+    assert gap.captures == 12
+
+
+def test_one_skipped_slot_is_thirty_minutes_and_stays_under_the_limit():
+    """A single failed cycle is not an incident — `render.yml` logs it and
+    carries on — so the number it produces has to sit below the limit that
+    pages someone."""
+    history = {"storm": product_history(0, 15, 45, 60)}
+
+    gap = publish.capture_gaps(history)["storm"]
+
+    assert gap.minutes == 30
+    assert gap.minutes < 40
+
+
+def test_the_ragged_scheduler_that_forced_the_cloudflare_trigger_is_visible():
+    """The real measurement that forced the move to an external trigger:
+    against GitHub's scheduler, captures arrived in bursts separated by 33, 62
+    and 129 minutes.
+
+    Every frame in that pattern was fresh. Freshness is exactly why it went
+    unnoticed for as long as it did, and why spacing needed its own check."""
+    history = {"storm": product_history(0, 15, 48, 63, 125, 140, 269)}
+
+    gap = publish.capture_gaps(history)["storm"]
+
+    assert gap.minutes == 129
+    assert gap.minutes > 40
+
+
+def test_the_gap_names_the_capture_it_follows():
+    """Bisecting a cadence problem starts with when the silence began, so the
+    report has to carry it rather than just its width."""
+    history = {"storm": product_history(0, 15, 75)}
+
+    gap = publish.capture_gaps(history)["storm"]
+
+    assert gap.after == T0 + timedelta(minutes=15)
+    assert gap.minutes == 60
+
+
+def test_the_worst_series_is_reported_not_the_first():
+    """The four series should be identical, so one falling out of step is a
+    real defect. Reporting the first series, or averaging them, would hide it
+    behind three healthy ones."""
+    history = {"storm": {
+        "wide-bn": series(0, 15, 30),
+        "wide-en": series(0, 15, 30),
+        "close-bn": series(0, 15, 30),
+        "close-en": series(0, 90),          # fell out of step
+    }}
+
+    gap = publish.capture_gaps(history)["storm"]
+
+    assert gap.minutes == 90
+    assert gap.series == "close-en"
+
+
+def test_captures_are_ordered_and_deduplicated_before_measuring():
+    """Consecutive trigger fires can land on the same upstream slot and
+    republish it, and nothing guarantees pointer order. Measuring raw order
+    would invent gaps, or negative ones."""
+    unordered = [T0 + timedelta(minutes=30), T0, T0 + timedelta(minutes=15), T0]
+
+    gap = publish.capture_gaps({"storm": {"wide-bn": unordered}})["storm"]
+
+    assert gap.minutes == 15
+    assert gap.captures == 3
+
+
+def test_a_product_with_one_capture_has_no_gap_to_report():
+    """A freshly filled bucket must not read as broken; there is simply
+    nothing to measure yet."""
+    gap = publish.capture_gaps({"storm": {"wide-bn": series(0)}})["storm"]
+
+    assert gap.minutes is None
+    assert gap.captures == 1
+
+
+def test_fog_declining_the_blind_band_is_why_storm_is_the_judged_product():
+    """Fog skips the ~40 minutes around sunrise on purpose, so its series shows
+    a hole that storm — 24 h on `ir108`, no ladder, no guard — never does.
+
+    Judging every product on one threshold would page twice a day for a product
+    working exactly as designed. This is the shape of the data that decision
+    rests on."""
+    history = {
+        "storm": product_history(0, 15, 30, 45, 60),
+        "fog": product_history(0, 15, 60),      # blind band between 15 and 60
+    }
+
+    gaps = publish.capture_gaps(history)
+
+    assert gaps["storm"].minutes == 15
+    assert gaps["fog"].minutes == 45
