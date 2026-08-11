@@ -13,11 +13,15 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import hmac
+import logging
 import os
 import shutil
+import time as _time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+log = logging.getLogger("storage")
 
 SERVICE = "s3"
 REGION = os.environ.get("S3_REGION", "auto")
@@ -81,18 +85,54 @@ class S3Client:
         return url, headers
 
     def _request(self, method: str, key: str, payload: bytes = b"",
-                 extra: dict | None = None) -> bytes:
-        url, headers = self._headers(method, key, payload, extra or {})
-        req = urllib.request.Request(url, data=payload or None, method=method)
-        for name, value in headers.items():
-            req.add_header(name, value)
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                return resp.read()
-        except urllib.error.HTTPError as exc:
-            if exc.code == 404:
-                raise FileNotFoundError(key) from exc
-            raise RuntimeError(f"{method} {key} failed: {exc.code} {exc.read()[:200]!r}") from exc
+                 extra: dict | None = None, attempts: int = 3,
+                 backoff: float = 2.0, sleep=_time.sleep) -> bytes:
+        """One storage call, with the same retry ladder the upstream fetch has.
+
+        Writes were the only unretried network hop in the pipeline, which made
+        them the likeliest reason for a cycle to die: publishing is ~49 calls
+        (four products × two views × two languages × three sizes, then the
+        pointer), so a per-call blip rate is multiplied by fifty before it
+        reaches the cycle. The fetch side has retried since S1; this is the same
+        idea applied to the other end, and it matters more here because a lost
+        write also strands the frames already uploaded (see `prunable`).
+
+        Retrying is safe because every verb here is idempotent: frame keys carry
+        their capture time and are written with identical bytes, `meta.json` is
+        a whole-object overwrite, and DELETE of an absent key is a no-op.
+
+        **The signature is rebuilt on every attempt, deliberately.** SigV4 signs
+        `x-amz-date`, so a set of headers computed once and reused after a
+        backoff would eventually be rejected as expired — a retry ladder that
+        quietly guarantees its own failure.
+        """
+        last_error = None
+        for attempt in range(attempts):
+            url, headers = self._headers(method, key, payload, extra or {})
+            req = urllib.request.Request(url, data=payload or None, method=method)
+            for name, value in headers.items():
+                req.add_header(name, value)
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    return resp.read()
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    raise FileNotFoundError(key) from exc
+                # 4xx is a bad request, not a bad moment: signing errors,
+                # permission failures and malformed keys fail identically
+                # however often they are repeated.
+                if 400 <= exc.code < 500:
+                    raise RuntimeError(
+                        f"{method} {key} failed: {exc.code} {exc.read()[:200]!r}"
+                    ) from exc
+                last_error = f"{exc.code} {exc.read()[:200]!r}"
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                last_error = repr(exc)
+            if attempt < attempts - 1:
+                log.warning("%s %s failed (%s); retrying", method, key, last_error)
+                sleep(backoff * (2 ** attempt))
+        raise RuntimeError(
+            f"{method} {key} failed after {attempts} attempts: {last_error}")
 
     # ── verbs ─────────────────────────────────────────────────────────────────
 
