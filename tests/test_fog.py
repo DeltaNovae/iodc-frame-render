@@ -180,3 +180,51 @@ def test_context_tone_is_monotonic_and_bounded():
     tones = [fog.context_tone(b) for b in range(0, 256, 8)]
     assert tones == sorted(tones, reverse=True)
     assert 0 <= min(tones) and max(tones) <= 255
+
+
+# ── the paleness gate (day side) ──────────────────────────────────────────────
+# Regression cover for a condition that was LOST IN A REFACTOR. The P3
+# calibration required fog to be pale (R >= 110); rewriting the test as a
+# continuous ramp kept the G ramp and the warmth floor and dropped R, which
+# stayed a parameter fog_intensity never read. Warm humid monsoon land clears
+# G and warmth on its own, so the day side called 80% of central Bangladesh
+# fog on an August morning while the visible imagery showed bare ground.
+
+MONSOON_LAND_R = 67      # measured over Mymensingh, 2026-08-11 03:00Z
+MONSOON_LAND = (MONSOON_LAND_R, 140, 170)
+
+
+def test_warm_humid_land_is_not_fog_however_strong_its_G():
+    """The August false positive, pinned. This pixel passes the warmth floor
+    and sits well up the G ramp; only reflectance rejects it."""
+    r, g, b = MONSOON_LAND
+    assert b >= fog.MIN_WARMTH_DAY          # clears warmth
+    assert g > fog.DAY_G_LO                 # clears the G ramp
+    assert fog.fog_intensity(r, g, b, night=False) == 0.0
+
+
+def test_paleness_gate_applies_to_the_day_side_only():
+    """Night microphysics has different channel semantics; R there is
+    IR12.0-IR10.8, not reflectance, so the gate must not leak across."""
+    dim_but_foggy_at_night = (60, DENSE_FOG_G, 200)
+    assert fog.fog_intensity(*dim_but_foggy_at_night, night=True) > 0.0
+
+
+def test_real_day_fog_is_pale_enough_to_survive_the_gate():
+    assert day_px(FOG_DAY_G)[0] >= fog.MIN_REFLECTANCE_DAY
+    assert fog.fog_intensity(*day_px(FOG_DAY_G), night=False) > 0.0
+
+
+def test_gate_sits_below_real_fog_reflectance():
+    """Measured: real fog is unaffected up to R 130, so the gate has margin.
+    If someone raises this past 130 they start losing thin burning-off fog."""
+    assert fog.MIN_REFLECTANCE_DAY <= 130
+
+
+@pytest.mark.parametrize("r,expected_fog", [
+    (fog.MIN_REFLECTANCE_DAY - 1, False),
+    (fog.MIN_REFLECTANCE_DAY, True),
+])
+def test_gate_boundary(r, expected_fog):
+    got = fog.fog_intensity(r, FOG_DAY_G, 172, night=False) > 0.0
+    assert got is expected_fog

@@ -105,6 +105,35 @@ MIN_WARMTH_DAY = 150        # ~285 K equivalent; see the note below on why this
 #: Thick high cloud reads warm in both microphysics RGBs — red well above blue.
 HIGH_CLOUD_MARGIN = 25
 
+#: DAY SIDE ONLY: fog must be PALE, and paleness lives in R.
+#:
+#: In Day Microphysics R is VIS0.8 reflectance and fog is bright there — a
+#: dense sheet sits around R 200. Warm humid monsoon land is not: it reads
+#: blue, R 50-70, while still clearing the G ramp and the warmth floor on its
+#: own. Without this gate the day recipe called 80% of central Bangladesh fog
+#: on an August morning when the visible imagery showed bare ground.
+#:
+#: THIS CONDITION WAS LOST IN A REFACTOR, not omitted by design. The P3
+#: calibration specified "pale: G>=110, R>=110, G>=0.75R, min>=90"; rewriting
+#: the test as a continuous intensity ramp kept the G ramp and the warmth floor
+#: and silently dropped R, which remained a parameter this function never read.
+#: It stayed invisible for a month because it only misfires OUT of the season
+#: the classifier was calibrated in — winter frames were the only evidence.
+#:
+#: 120 chosen against three ground truths (monsoon / real fog / clear winter):
+#:
+#:     R floor   AUG monsoon   JAN fog 07:30   JAN fog 08:30   FEB clear
+#:        none        80.3%          56.3%           31.5%        3.6%
+#:         110         5.5%          56.3%           31.5%        3.6%
+#:         120         2.1%          56.3%           29.2%        3.6%   <-
+#:         150         0.0%          54.6%           13.6%        3.5%
+#:
+#: Real fog is untouched up to 130 — every genuine fog pixel is already pale,
+#: so the gate is nearly free. 120 is where monsoon false positives fall BELOW
+#: the clear-winter baseline; tightening past it only costs thin burning-off
+#: fog, and that marginal morning is exactly the one a driver needs.
+MIN_REFLECTANCE_DAY = 120
+
 #: Below this the signal is noise, not thin fog; painting it would speckle.
 MIN_INTENSITY = 0.12
 
@@ -172,6 +201,10 @@ def fog_intensity(r: int, g: int, b: int, night: bool) -> float:
     """
     if b < (MIN_WARMTH_NIGHT if night else MIN_WARMTH_DAY):
         # Cold top: this is cloud far above the ground, not fog on it.
+        return 0.0
+    if not night and r < MIN_REFLECTANCE_DAY:
+        # Not pale: warm humid land clears the gates above on its own, and only
+        # reflectance separates it from the fog sheet. See MIN_REFLECTANCE_DAY.
         return 0.0
     lo, hi = (NIGHT_G_LO, NIGHT_G_HI) if night else (DAY_G_LO, DAY_G_HI)
     if g <= lo:
