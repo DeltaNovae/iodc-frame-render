@@ -90,6 +90,35 @@ def test_storm_and_fog_take_night_even_though_their_flag_says_otherwise():
 # ── What gets published ──────────────────────────────────────────────────────
 
 
+def _mismatch(a, b) -> tuple:
+    """(max channel error, share of samples off by more than 8/255).
+
+    Eight is roughly where a step on a smooth gradient starts to be visible;
+    the published overlay is palette-quantized, so equality is asserted within
+    that band rather than byte-for-byte.
+    """
+    from PIL import ImageChops
+    diff = ImageChops.difference(a, b)
+    worst = 0
+    over8 = 0
+    total = a.width * a.height * 4
+    for channel in diff.split():
+        histogram = channel.histogram()
+        for value in range(255, -1, -1):
+            if histogram[value]:
+                worst = max(worst, value)
+                break
+        over8 += sum(histogram[9:])
+    return worst, over8 / total
+
+
+#: What quantization measured on the committed assets (max err 31–43, <1% of
+#: samples over 8) — asserted with headroom, not at the observed values, so a
+#: slightly different palette does not flake the suite.
+QUANT_MAX_ERR = 64
+QUANT_MAX_SHARE_OVER_8 = 0.03
+
+
 def test_rain_publishes_lines_merged_with_labels_not_labels_alone():
     """The gate that fired during the build.
 
@@ -97,17 +126,26 @@ def test_rain_publishes_lines_merged_with_labels_not_labels_alone():
     Khulna was painting out the coastline. So rain's loop frame stops below
     both, and publishing labels alone would ship a loop with no coastline at
     all: the exact failure that moved the lines up in the first place.
+
+    Comparative, because the published bytes are quantized: what is published
+    must be NEAR the merge and measurably NOT the labels alone — the lines'
+    pixels are exactly the difference between those two.
     """
     view = VIEWS["close"]
-    published = overlays.publishable(view, "bn", "light")
+    published = _decode(overlays.publishable(view, "bn", "light"))
 
     labels_only = overlays.load_light_labels(view, "bn")
     merged = overlays.load_light_lines(view).copy()
     merged.paste(labels_only, (0, 0), labels_only)
 
-    assert _decode(published).tobytes() == merged.tobytes()
-    assert _decode(published).tobytes() != labels_only.tobytes(), (
-        "rain published its labels without the lines"
+    err_vs_merged, share_vs_merged = _mismatch(published, merged)
+    assert err_vs_merged <= QUANT_MAX_ERR
+    assert share_vs_merged <= QUANT_MAX_SHARE_OVER_8
+
+    _, share_vs_labels = _mismatch(published, labels_only)
+    assert share_vs_labels > share_vs_merged * 3, (
+        "the published overlay is closer to labels-alone than to the merge — "
+        "rain shipped with no coastline"
     )
 
 
@@ -116,7 +154,25 @@ def test_day_and_night_publish_the_asset_the_renderer_bakes(variant):
     view = VIEWS["wide"]
     published = _decode(overlays.publishable(view, "bn", variant))
     baked = overlays.load(view, "bn", night=variant == "night")
-    assert published.tobytes() == baked.tobytes()
+    worst, share = _mismatch(published, baked)
+    assert worst <= QUANT_MAX_ERR, "published overlay has drifted beyond quantization error"
+    assert share <= QUANT_MAX_SHARE_OVER_8
+
+
+@pytest.mark.parametrize("view_key,lang,variant", [
+    (v, l, x) for v in ("wide", "close") for l in ("bn", "en")
+    for x in ("day", "night", "light")
+])
+def test_every_published_overlay_fits_the_wire_budget(view_key, lang, variant):
+    """~35 KB quantized against 145-157 KB as full RGBA. The ceiling is the
+    guard: removing the quantization would not fail any equality test — the
+    pixels stay near-identical — it would only quietly quadruple the largest
+    object a loop play downloads, on the connections this app is built for.
+    """
+    body = overlays.publishable(VIEWS[view_key], lang, variant)
+    assert len(body) <= 50_000, (
+        f"{view_key}-{lang}-{variant} is {len(body)} bytes — quantization lost?"
+    )
 
 
 def test_an_unknown_variant_is_refused():
