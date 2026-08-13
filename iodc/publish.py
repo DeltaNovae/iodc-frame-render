@@ -20,6 +20,7 @@ repository.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import dataclass
@@ -32,6 +33,7 @@ from . import sizes
 RETAIN = int(os.environ.get("RETAIN_FRAMES", "12"))
 
 CONTENT_TYPE = "image/jpeg"
+OVERLAY_CONTENT_TYPE = "image/png"
 
 # Frames never change, so they may be cached indefinitely. `meta.json` is the
 # pointer and must not be, or a client would keep finding yesterday's frames.
@@ -80,6 +82,28 @@ def frame_key(prefix: str, product: str, view: str, lang: str, size: str,
     return f"{prefix}/{product}/{view}-{lang}/{size}/{stamp}.jpg"
 
 
+def overlay_key(prefix: str, view: str, lang: str, variant: str,
+                digest: str) -> str:
+    """`sat/overlays/close-bn-night-1a2b3c4d.png`.
+
+    **Content-hashed, so it obeys the same immutability rule as a frame.** A
+    frame earns that from its capture time; an overlay has no time, so the hash
+    of its bytes stands in — republish changed pixels and the key changes with
+    them, which makes the swap atomic and the object cacheable forever. An
+    overlay keyed by name alone would have to be either mutable or manually
+    versioned, and a stale cached copy of a *map* is a worse failure than a
+    stale frame: the picture would be current and the coastline wrong.
+    """
+    return f"{prefix}/overlays/{view}-{lang}-{variant}-{digest}.png"
+
+
+def overlay_digest(body: bytes) -> str:
+    """Eight hex characters of SHA-256 — enough that a collision between the
+    handful of overlays this pipeline publishes is not a real risk, short
+    enough to keep the key readable in a log line."""
+    return hashlib.sha256(body).hexdigest()[:8]
+
+
 def meta_key(prefix: str) -> str:
     return f"{prefix}/meta.json"
 
@@ -88,7 +112,12 @@ def build_meta(prefix: str, products: dict, history: dict) -> dict:
     """Describe the current set for readers — **contract v2**.
 
     `products` maps a product key to `{"product": Product, "entries": {(view,
-    lang): captured_at}}`.
+    lang): captured_at}, "overlays": {(view, lang): key}}`.
+
+    `overlays` is **additive** — it names the map layer a reader draws above
+    the loop frames, which carry imagery only. An older pointer simply lacks
+    the field, and a reader that does not know about it ignores one string;
+    neither is a contract break, which is why this needed no v3.
 
     Two shape changes from v1, both made while the app was still unreleased and
     the contract therefore free:
@@ -110,6 +139,7 @@ def build_meta(prefix: str, products: dict, history: dict) -> dict:
         product = payload["product"]
         entries = payload["entries"]
         views = {}
+        overlays = payload.get("overlays") or {}
         for (view_key, lang), captured_at in entries.items():
             name = f"{view_key}-{lang}"
             times = sorted(
@@ -117,6 +147,10 @@ def build_meta(prefix: str, products: dict, history: dict) -> dict:
             )[-RETAIN:]
             views[name] = {
                 "capturedAtUtc": _iso(captured_at),
+                # Omitted rather than null when absent: a reader tests for the
+                # field, and a null would have to be special-cased separately.
+                **({"overlay": overlays[(view_key, lang)]}
+                   if (view_key, lang) in overlays else {}),
                 "latest": _sizes_for(prefix, product_key, view_key, lang, captured_at),
                 "frames": [
                     dict(capturedAtUtc=_iso(t),

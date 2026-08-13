@@ -131,34 +131,54 @@ def render_cycle(when: datetime, force: str | None = None,
             for view in VIEWS.values():
                 frame, used = _fetch_down_the_ladder(caps, rungs, view, before,
                                                      fetched)
+                # `bare` is the product WITHOUT anything a reader navigates by:
+                # it is what the loop frame encodes from. Baking the overlay in
+                # and then downscaling to 320 px shrank 15 px labels to 6.9 px
+                # and the 1.9 px national border to sub-pixel; the loop now
+                # carries imagery only and the overlay is delivered once, at
+                # full resolution. `bare` is also language-independent, which
+                # is why the loop frame is.
                 if used.key == "rain":
-                    # The sandwich: base below the data, labels above it.
-                    image = rain.compose(Image.open(io.BytesIO(frame.raw)), view)
+                    # The sandwich: base below the data, LINES AND labels above
+                    # it — so rain's bare frame stops at the data and its lines
+                    # travel with the overlay (see rain.py).
+                    raw = Image.open(io.BytesIO(frame.raw))
+                    bare = rain.compose_bare(raw, view)
+                    image = rain.add_lines(bare.copy(), view)
                 elif used.key == "fog":
                     image = fog.compose(Image.open(io.BytesIO(frame.raw)), view,
                                         night=used.layer == "rgb_fog")
+                    bare = image
                 else:
                     image = Image.open(io.BytesIO(frame.raw)).convert("RGB")
                     image = _tone(image, used)
+                    bare = image
 
+                variant = _overlay_variant(used)
                 for lang in overlays.languages():
                     # Rain alone keeps the light map; fog now renders its own
                     # sky (Option B) and takes the dark overlay like the other
                     # imagery products.
                     overlay = (overlays.load_light_labels(view, lang)
-                               if used.key == "rain"
+                               if variant == "light"
                                else overlays.load(view, lang,
-                                                  night=used.key in ("fog", "storm")
-                                                  or used.is_night))
+                                                  night=variant == "night"))
                     composed = image.copy()
                     composed.paste(overlay, (0, 0), overlay)
                     views.setdefault(view.key, {})[lang] = {
                         "image": composed,
+                        # The LOOP size renders from this instead: imagery
+                        # only, no overlay to be destroyed by the downscale.
+                        "bare": bare,
                         # The FULL size additionally carries the in-frame
                         # legend strip, so a cropped screenshot keeps the
                         # legend and the attribution. Thumbs stay clean
                         # previews and loop frames clean motion.
                         "stamped": _stamp(composed, view, used.key, lang),
+                        # Which overlay a reader must draw above the loop
+                        # frames. Recorded here, beside the one baked in, so
+                        # the two are decided by the same call.
+                        "overlay_variant": variant,
                         "captured_at": frame.captured_at,
                         "layer": used.layer,
                     }
@@ -293,8 +313,13 @@ def publish_cycle(result: dict, client, target: publish.Target) -> dict:
     history = publish.history_from_meta(previous)
 
     to_publish = {}
+    # Deduped across products: at night clouds, storm and fog all composite the
+    # same night overlay, and uploading identical bytes three times per view
+    # per language would triple the writes for nothing.
+    overlay_bodies: dict = {}
     for product_key, payload in result["products"].items():
         entries = {}
+        product_overlays = {}
         for view_key, langs in payload["views"].items():
             for lang, view_payload in langs.items():
                 captured_at = view_payload["captured_at"]
@@ -304,15 +329,33 @@ def publish_cycle(result: dict, client, target: publish.Target) -> dict:
                 for size in sizes.SIZES:
                     key = publish.frame_key(target.prefix, product_key, view_key,
                                             lang, size.key, captured_at)
-                    source = (view_payload.get("stamped", view_payload["image"])
-                              if size.key == "full" else view_payload["image"])
+                    source = _source_for(view_payload, size.key)
                     body = encode(size.scale(source), quality=size.quality)
                     client.put(key, body, publish.CONTENT_TYPE,
                                publish.FRAME_CACHE_CONTROL)
                     log.info("  put %-58s %3d KB", key, len(body) // 1024)
                 entries[(view_key, lang)] = captured_at
+
+                variant = view_payload["overlay_variant"]
+                body = overlays.publishable(VIEWS[view_key], lang, variant)
+                key = publish.overlay_key(target.prefix, view_key, lang, variant,
+                                          publish.overlay_digest(body))
+                overlay_bodies[key] = body
+                product_overlays[(view_key, lang)] = key
         to_publish[product_key] = {"product": payload["product"],
-                                   "entries": entries}
+                                   "entries": entries,
+                                   "overlays": product_overlays}
+
+    # Before the pointer that names them — the frames' rule, for the same
+    # reason. And re-put every cycle rather than skipping keys the previous
+    # pointer already named: the bytes are identical, so it costs a few writes,
+    # and it means a deleted overlay heals itself on the next cycle instead of
+    # leaving every loop mapless until someone notices. Every scheduled job
+    # here has to recover from any failure on its next run, unattended.
+    for key, body in overlay_bodies.items():
+        client.put(key, body, publish.OVERLAY_CONTENT_TYPE,
+                   publish.FRAME_CACHE_CONTROL)
+        log.info("  put %-58s %3d KB", key, len(body) // 1024)
 
     meta = publish.carry_forward(
         publish.build_meta(target.prefix, to_publish, history), previous)
@@ -389,14 +432,55 @@ def main() -> int:
     return 0
 
 
+def _overlay_variant(product) -> str:
+    """Which overlay this product's frames carry — `day`, `night` or `light`.
+
+    ONE rule, called once per view, feeding both the overlay baked into the
+    full frame and the one published for the loop. It exists as a function
+    because the condition used to be written inline at the paste
+    site: duplicating it for the published copy would let the two drift, and
+    the symptom would be a loop wearing a *different map* from the still frame
+    it opens with — labels appearing, or a coastline vanishing, on play.
+
+    Rain takes the light map; fog and storm are infrared and take the heavier
+    night overlay around the clock; everything else follows the sun.
+    """
+    if product.key == "rain":
+        return "light"
+    if product.key in ("fog", "storm") or product.is_night:
+        return "night"
+    return "day"
+
+
+def _source_for(payload: dict, size_key: str):
+    """Which rendering of the frame a given size encodes from.
+
+    One rule, one place — the publish path and the local-output path must not
+    be able to disagree about it, or a size would look right on disk and wrong
+    in the bucket.
+
+      * ``full``  — the composited frame plus the in-frame legend strip.
+      * ``thumb`` — the composited frame: a preview keeps its labels.
+      * ``loop``  — **imagery only**. Baked overlays do not survive the 320 px
+        downscale; the overlay ships once, separately, instead.
+
+    A payload predating the split carries no `bare`, so it falls back to the
+    composited image — the previous behaviour rather than a crash.
+    """
+    if size_key == "full":
+        return payload.get("stamped", payload["image"])
+    if size_key == "loop":
+        return payload.get("bare", payload["image"])
+    return payload["image"]
+
+
 def _write_local(product_key: str, views: dict) -> None:
     for view_key, langs in views.items():
         for lang, payload in langs.items():
             for size in sizes.SIZES:
                 name = f"{product_key}-{view_key}-{lang}-{size.key}.jpg"
                 path = os.path.join(OUT_DIR, name)
-                source = (payload.get("stamped", payload["image"])
-                          if size.key == "full" else payload["image"])
+                source = _source_for(payload, size.key)
                 with open(path, "wb") as fh:
                     fh.write(encode(size.scale(source), quality=size.quality))
                 log.info("  %-40s %3d KB  %s  captured %s", name,

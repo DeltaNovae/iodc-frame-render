@@ -131,18 +131,27 @@ def test_a_pinned_instant_is_its_own_decision_time(slot_at, monkeypatch):
 
 
 class _FakeImage:
-    """Stands in for a PIL image everywhere the cycle touches one."""
+    """Stands in for a PIL image everywhere the cycle touches one.
+
+    `copy` returns a NEW instance and `paste` is recorded, because the loop
+    frame is defined by what has NOT been pasted onto it — a fake whose
+    copy returned `self` would make the bare frame and the composited one the
+    same object and quietly satisfy any assertion about the difference.
+    """
     size = (640, 640)
     width, height = 640, 640
+
+    def __init__(self):
+        self.pastes = 0
 
     def convert(self, mode):
         return self
 
     def copy(self):
-        return self
+        return _FakeImage()
 
     def paste(self, *a, **k):
-        pass
+        self.pastes += 1
 
 
 class _FakeFrame:
@@ -176,7 +185,8 @@ def cycle(monkeypatch):
     monkeypatch.setattr(render.Image, "open", lambda *a, **k: _FakeImage())
     monkeypatch.setattr(render, "_tone", lambda image, product: image)
     monkeypatch.setattr(render, "_stamp", lambda image, *a, **k: image)
-    monkeypatch.setattr(render.rain, "compose", lambda raw, view: _FakeImage())
+    monkeypatch.setattr(render.rain, "compose_bare", lambda raw, view: _FakeImage())
+    monkeypatch.setattr(render.rain, "add_lines", lambda image, view: image)
     monkeypatch.setattr(render.fog, "compose",
                         lambda raw, view, night: _FakeImage())
     monkeypatch.setattr(render.overlays, "languages", lambda: ["bn"])
@@ -244,3 +254,67 @@ def test_every_product_failing_still_raises(cycle):
 
     with pytest.raises(RuntimeError, match="every product failed"):
         render.render_cycle(NIGHT_RUN)
+
+
+# ── The loop frame carries imagery only ──────────────────────────────────────
+#
+# Baking the overlay in and then downscaling to 320 px multiplied every
+# absolute pixel size by 0.457: 15 px labels rendered at 6.9 px and the
+# deliberately-heaviest 1.9 px national border landed SUB-PIXEL. Continuous-
+# tone cloud survives a resample; crisp text and 1 px lines do not. So the loop
+# renders from the frame BEFORE anything a reader navigates by is added, and
+# the overlay ships once at full resolution.
+#
+# These assert the property, not the pixels: full and thumb keep what they had,
+# loop must be a DIFFERENT source. A test that only checked "loop exists" would
+# have passed against the old code.
+
+
+@pytest.mark.parametrize("size_key,expected", [
+    ("full", "stamped"),    # composited + the in-frame legend strip
+    ("thumb", "image"),     # composited: a preview keeps its labels
+    ("loop", "bare"),       # imagery only — the whole point
+])
+def test_each_size_encodes_from_its_own_source(size_key, expected):
+    payload = {"image": "IMAGE", "stamped": "STAMPED", "bare": "BARE"}
+    assert render._source_for(payload, size_key) == payload[expected]
+
+
+def test_a_payload_without_bare_falls_back_to_the_composited_frame():
+    """Absent `bare` is the older payload shape. Falling back to the composited
+    image reproduces the old behaviour; raising would turn a stale payload into
+    a dead cycle, the failure mode the per-product boundary exists to avoid."""
+    payload = {"image": "IMAGE", "stamped": "STAMPED"}
+    assert render._source_for(payload, "loop") == "IMAGE"
+
+
+def test_the_cycle_gives_every_frame_a_bare_source_that_is_not_the_composite(cycle):
+    """The wiring, not just the rule.
+
+    `bare` must reach the payload for all four products and must not be the
+    same object the overlay was pasted onto — the fake records pastes, so an
+    implementation that stored the composited image under `bare` fails here.
+    """
+    cycle(RuntimeError("unused"), failing_product="__none__")
+
+    result = render.render_cycle(NIGHT_RUN)
+
+    assert set(result["products"]) == {"clouds", "storm", "rain", "fog"}
+    for product_key, payload in result["products"].items():
+        for view_key, langs in payload["views"].items():
+            for lang, view_payload in langs.items():
+                where = f"{product_key}/{view_key}/{lang}"
+                bare = view_payload.get("bare")
+                assert bare is not None, f"{where} published no bare frame"
+                assert bare is not view_payload["image"], (
+                    f"{where} stored the COMPOSITED frame as bare — the loop "
+                    f"would still bake in the overlay"
+                )
+                assert bare.pastes == 0, (
+                    f"{where} pasted {bare.pastes} layer(s) onto the bare "
+                    f"frame; the loop must carry imagery only"
+                )
+                assert view_payload["image"].pastes >= 1, (
+                    f"{where} never pasted the overlay onto the composited "
+                    f"frame — the harness is not exercising the real path"
+                )

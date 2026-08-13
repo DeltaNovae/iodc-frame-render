@@ -12,6 +12,7 @@ the frame's bbox before compositing.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 
@@ -124,6 +125,41 @@ def load_strip(view, product: str, lang: str) -> Image.Image:
                 )
             return image
     raise FileNotFoundError(f"no strip for view={view.key} product={product} lang={lang}")
+
+
+def publishable(view, lang: str, variant: str) -> bytes:
+    """The overlay a READER composites, as PNG bytes.
+
+    The loop frame carries imagery only, so whatever a reader navigates by has
+    to reach them separately. What that is differs by variant:
+
+      * ``day`` / ``night`` — the same single asset the renderer bakes into the
+        full frame.
+      * ``light`` — rain's, and the one that is **not** the baked overlay.
+        Rain's sandwich puts LINES above the data as well as labels
+        (`rain.py`), so its loop frame stops below both and the published
+        overlay must carry the two merged. Publishing labels alone would ship a
+        loop with no coastline at all.
+
+    Every variant goes through `_verified`, so a bbox or size mismatch is
+    refused here exactly as it is at composite time — a wrong overlay published
+    for readers to draw is the same "confident, beautifully drawn, completely
+    wrong map" this module exists to prevent, just delivered one hop later.
+    """
+    if variant == "light":
+        image = load_light_lines(view).copy()
+        labels = load_light_labels(view, lang)
+        image.paste(labels, (0, 0), labels)
+    elif variant in ("day", "night"):
+        image = load(view, lang, night=variant == "night")
+    else:
+        raise ValueError(f"unknown overlay variant {variant!r}")
+
+    buffer = io.BytesIO()
+    # No metadata beyond the pixels: the bytes are content-hashed into the key,
+    # so anything varying run to run would mint a new object every cycle.
+    image.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue()
 
 
 def languages() -> list:
