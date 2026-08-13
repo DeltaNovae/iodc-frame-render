@@ -27,6 +27,32 @@ def km_per_px(view) -> float:
     return (view.bbox.lon_span * 111.32 * math.cos(math.radians(mid_lat))) / view.width
 
 
+def test_every_size_preserves_the_view_aspect_exactly():
+    """The loop frame and the overlay must letterbox IDENTICALLY on a device.
+
+    A reader composites the published overlay on top of the loop frame, both
+    scaled to fit the same box. They line up only because they share an aspect
+    ratio exactly — and that is luck, not design: `Size.scale` rounds width and
+    height independently, so a view whose dimensions do not divide cleanly would
+    round to a slightly different shape and slide the coastline off the sea by a
+    pixel or two.
+
+    It holds today (700x630 -> 320x288, 640x640 -> 320x320, both exact). This
+    asserts it keeps holding, because the failure would be a subtly misregistered
+    map — the kind of wrong that looks like bad art rather than a bug, and that
+    no byte-budget or serving test would ever notice.
+    """
+    for view in (WIDE, CLOSE):
+        source = Image.new("RGB", view.size)
+        for size in sizes.SIZES:
+            scaled = size.scale(source)
+            assert scaled.width * view.height == scaled.height * view.width, (
+                f"{view.key} at size '{size.key}' is {scaled.width}x{scaled.height}, "
+                f"which is not the view's {view.width}x{view.height} shape — a layer "
+                f"drawn over it would be misaligned"
+            )
+
+
 def test_neither_view_asks_for_finer_detail_than_the_sensor_provides():
     """Requesting beyond the sensor only encodes upscaling artefacts."""
     for view in (WIDE, CLOSE):
