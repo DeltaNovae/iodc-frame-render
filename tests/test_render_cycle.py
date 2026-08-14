@@ -258,8 +258,9 @@ def test_every_product_failing_still_raises(cycle):
 
 # ── The loop frame carries imagery only ──────────────────────────────────────
 #
-# Baking the overlay in and then downscaling to 320 px multiplied every
-# absolute pixel size by 0.457: 15 px labels rendered at 6.9 px and the
+# Baking the overlay in and then downscaling to the loop size multiplied every
+# absolute pixel size by the same factor — at the 320 px of the time, 0.457:
+# 15 px labels rendered at 6.9 px and the
 # deliberately-heaviest 1.9 px national border landed SUB-PIXEL. Continuous-
 # tone cloud survives a resample; crisp text and 1 px lines do not. So the loop
 # renders from the frame BEFORE anything a reader navigates by is added, and

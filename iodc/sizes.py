@@ -8,8 +8,21 @@ One image cannot serve all three places it is shown:
     the row downloaded ~85 KB per tile to paint a postage stamp: ~340 KB per
     Home load at four products, on 2G phones.
   * **loop** — the animation. Twelve full frames is ~1 MB per play and ~20 MB
-    of decoded bitmaps on a 1–2 GB device. A loop is for **motion, not
-    detail**, so a smaller frame costs almost nothing perceptually.
+    of decoded bitmaps on a 1–2 GB device, so the loop frame stays well below
+    native.
+
+    "A loop is for motion, not detail" justified 320 px, and that was judged
+    against a still. It does not survive the two-layer loop: the overlay now
+    reaches the reader at its authored resolution and the imagery does not, so
+    at 320 the map lines stayed crisp while the cloud beneath them went soft —
+    visibly, and only during playback. Review called the imagery blurry and was
+    right. 440 takes most of that back (2.00× upscale → 1.45× on the square
+    view) for ~25 KB a frame, inside the budget below.
+
+    Native is the wrong end of the trade: 640 costs ~52 KB a frame — ~640 KB a
+    play on 2G — and ~20 MB of decoded bitmaps, past the image cache on a small
+    device. Eviction, re-decode, a loop that stutters. Softness is the better
+    failure of the two.
 
 All three are published in the same cycle from the same composited image, so
 they always agree with each other and with the capture time in their key.
@@ -56,7 +69,17 @@ class Size:
 
 FULL = Size("full", None, 78)
 THUMB = Size("thumb", 160, 70)
-LOOP = Size("loop", 320, 72)
+# A multiple of ten, and not 448: `Size.scale` rounds width and height
+# independently, so the wide view's 700×630 stays exactly 10:9 only on multiples
+# of ten. 448 lands on 448×403 and misregisters the overlay — the aspect test
+# catches it, and nothing else in the repo says the constraint exists.
+#
+# 440 rather than the 450 the sharpness argument alone would pick: against the
+# budget test's synthetic worst case the close frame encodes to 90% of the
+# ceiling at 440 and 95% at 450, and a ceiling with 5% left is one ordinary
+# tweak away from a red build. The sharpness difference between them is
+# 1.45× and 1.42× — nothing an eye adjudicates.
+LOOP = Size("loop", 440, 72)
 
 SIZES = (FULL, THUMB, LOOP)
 

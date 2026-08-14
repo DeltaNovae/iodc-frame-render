@@ -37,10 +37,14 @@ def test_every_size_preserves_the_view_aspect_exactly():
     round to a slightly different shape and slide the coastline off the sea by a
     pixel or two.
 
-    It holds today (700x630 -> 320x288, 640x640 -> 320x320, both exact). This
+    It holds today (700x630 -> 440x396, 640x640 -> 440x440, both exact). This
     asserts it keeps holding, because the failure would be a subtly misregistered
     map — the kind of wrong that looks like bad art rather than a bug, and that
     no byte-budget or serving test would ever notice.
+
+    It has already earned its keep: raising the loop edge for sharpness, the
+    obvious-looking 448 rounds the wide view to 448x403 and fails right here.
+    The legal values are multiples of ten, and nothing else in the repo says so.
     """
     for view in (WIDE, CLOSE):
         source = Image.new("RGB", view.size)

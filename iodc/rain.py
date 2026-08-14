@@ -21,7 +21,7 @@ the border with it — the marks that say where you are (owner report).
 frame stops after the rain (`compose_bare`), because the two navigation layers
 above it — lines *and* labels — are shipped once as a separate overlay and
 composited by the reader instead of being baked into twelve frames and then
-destroyed by the downscale to 320 px. Rain is the one product where **lines**
+destroyed by the downscale to the loop size. Rain is the one product where **lines**
 must travel with that overlay too, for exactly the reason recorded above: they
 sit above the data, so they cannot stay behind with the base.
 

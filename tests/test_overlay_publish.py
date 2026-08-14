@@ -1,10 +1,12 @@
 """The overlay a reader composites over the loop frames.
 
 The loop frame carries imagery only, because baking the overlay in and then
-downscaling to 320 px multiplied every absolute pixel size by 0.457 — 15 px
-labels rendered at 6.9 px and the deliberately-heaviest 1.9 px national border
-landed SUB-PIXEL. So the map layer has to reach the reader some other way, and
-these are the tests for that way.
+downscaling to the loop size multiplied every absolute pixel size by the same
+factor — at the 320 px of the time, 0.457: 15 px labels rendered at 6.9 px and
+the deliberately-heaviest 1.9 px national border landed SUB-PIXEL. So the map
+layer has to reach the reader some other way, and these are the tests for that
+way. Raising the loop edge shrinks the factor but never removes it, which is
+why this design outlives any particular size.
 
 Two failure modes are worth more than the rest and are tested hardest:
 
