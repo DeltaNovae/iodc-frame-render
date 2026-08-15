@@ -16,8 +16,8 @@ One image cannot serve all three places it is shown:
     reaches the reader at its authored resolution and the imagery does not, so
     at 320 the map lines stayed crisp while the cloud beneath them went soft —
     visibly, and only during playback. Review called the imagery blurry and was
-    right. 440 takes most of that back (2.00× upscale → 1.45× on the square
-    view) for ~25 KB a frame, inside the budget below.
+    right. 400 takes most of that back (2.00× upscale → 1.60× on the square
+    view, 1.75× on the wide one) for ~20–29 KB a frame.
 
     Native is the wrong end of the trade: 640 costs ~52 KB a frame — ~640 KB a
     play on 2G — and ~20 MB of decoded bitmaps, past the image cache on a small
@@ -74,12 +74,21 @@ THUMB = Size("thumb", 160, 70)
 # of ten. 448 lands on 448×403 and misregisters the overlay — the aspect test
 # catches it, and nothing else in the repo says the constraint exists.
 #
-# 440 rather than the 450 the sharpness argument alone would pick: against the
-# budget test's synthetic worst case the close frame encodes to 90% of the
-# ceiling at 440 and 95% at 450, and a ceiling with 5% left is one ordinary
-# tweak away from a red build. The sharpness difference between them is
-# 1.45× and 1.42× — nothing an eye adjudicates.
-LOOP = Size("loop", 440, 72)
+# 400, arrived at by shipping 440 and MEASURING what it did. Two things the
+# synthetic never showed:
+#
+#   * The WIDE view is the binding case, not close — 440×396 encodes LARGER
+#     than 440×440 despite having fewer pixels, because it spans far more
+#     varied terrain and so carries more high-frequency detail.
+#   * Real imagery encodes ~1.43× the synthetic. Published 440 px wide frames
+#     measured 33,692 B (storm) and 30,366 B (clouds) against a 30,000 ceiling
+#     the test had called comfortable.
+#
+# 400 puts the worst real frame at ~28.8 KB — under, though only just. Anything
+# larger breaches: 420 still measures ~31.4 KB. The remaining sharpness gap
+# between 400 and 440 is 1.75× vs 1.59× upscale on the wide view; the ceiling
+# is the harder constraint and it wins.
+LOOP = Size("loop", 400, 72)
 
 SIZES = (FULL, THUMB, LOOP)
 

@@ -37,7 +37,7 @@ def test_every_size_preserves_the_view_aspect_exactly():
     round to a slightly different shape and slide the coastline off the sea by a
     pixel or two.
 
-    It holds today (700x630 -> 440x396, 640x640 -> 440x440, both exact). This
+    It holds today (700x630 -> 400x360, 640x640 -> 400x400, both exact). This
     asserts it keeps holding, because the failure would be a subtly misregistered
     map — the kind of wrong that looks like bad art rather than a bug, and that
     no byte-budget or serving test would ever notice.
@@ -144,6 +144,74 @@ def test_a_twelve_frame_loop_stays_under_half_a_megabyte():
     loop = render.encode(sizes.LOOP.scale(cloudlike(CLOSE)),
                          quality=sizes.LOOP.quality)
     assert len(loop) * 12 < 500_000
+
+
+def looplike(view):
+    """`cloudlike` without the overlay — what a loop frame actually is.
+
+    `cloudlike` pastes the overlay in, and for the full and thumb sizes that is
+    correct: they ship with it baked. A LOOP frame does not. The overlay reaches
+    the reader as its own layer, which is the entire two-layer design — so every
+    loop budget ever measured against `cloudlike` measured a picture that is not
+    published.
+    """
+    import random
+
+    from PIL import ImageFilter
+    rnd = random.Random(5)
+    base = Image.new("RGB", view.size)
+    base.putdata([(rnd.randrange(40, 220),) * 3
+                  for _ in range(view.width * view.height)])
+    return base.filter(ImageFilter.GaussianBlur(2.2))
+
+
+#: Even overlay-free, blurred noise is not weather: it under-states real cloud,
+#: and by a DIFFERENT amount per view. Wide spans far more varied terrain, so it
+#: carries the most high-frequency detail and compresses worst — which is why
+#: 400x360 out-weighs 400x400 despite having fewer pixels.
+#:
+#:     view    looplike @440    published storm frame    factor
+#:     wide         16,358 B                 33,692 B     2.06
+#:     close        17,143 B                 24,917 B     1.45
+#:
+#: These numbers exist because the old fixture waved through a loop edge that
+#: breached the real ceiling by 12% while every test stayed green, and the error
+#: was not even in one direction: the dense close overlay (27 labels plus
+#: division outlines) inflated close ~9%, while the sparse wide one left wide
+#: understated ~30%. Two mistakes that partly cancelled in the average and so
+#: hid each other.
+#:
+#: CALIBRATIONS, not laws. Measured 2026-08-14 against published frames;
+#: re-measure when a product's rendering changes. The durable fix is a committed
+#: real-frame fixture, which nothing here is a substitute for.
+REAL_OVER_LOOPLIKE = {"wide": 2.06, "close": 1.45}
+
+
+def test_the_loop_ceiling_holds_for_REAL_imagery_not_just_the_synthetic():
+    """The budget that actually binds, on the view that actually binds.
+
+    Three blind spots let a 12% breach ship green, and this closes them: the
+    fixture included an overlay a loop frame does not carry; the projection to
+    real bytes was never made at all; and every loop budget test before this one
+    sampled CLOSE, when WIDE is the binding view.
+
+    Fails loudly if someone raises the loop edge without measuring — which is
+    exactly what happened.
+    """
+    limit = sizes.BUDGET_BYTES[sizes.LOOP.key]
+    for view in (WIDE, CLOSE):
+        body = render.encode(sizes.LOOP.scale(looplike(view)),
+                             quality=sizes.LOOP.quality)
+        projected = len(body) * REAL_OVER_LOOPLIKE[view.key]
+        assert projected <= limit, (
+            f"{view.key} loop projects to {projected:.0f} B of real imagery "
+            f"(looplike {len(body)} B x {REAL_OVER_LOOPLIKE[view.key]}), over the "
+            f"{limit} B ceiling — the edge is too large, measure before raising"
+        )
+        assert projected * 12 < 500_000, (
+            f"{view.key}: a twelve-frame play projects to "
+            f"{projected * 12 / 1024:.0f} KB of real imagery"
+        )
 
 
 def test_sizes_never_upscale():
