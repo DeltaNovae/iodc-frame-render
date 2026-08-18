@@ -14,10 +14,19 @@ on:
   # which also means a broken render surfaces in minutes rather than after a
   # whole batch has published with it.
   #
-  # This schedule stays as a FALLBACK. If the Worker dies, publishing degrades
-  # to hourly instead of stopping — and a *scheduled* firing still takes the
-  # batch (CYCLES keys on event_name below), so an outage yields a usable
-  # spread of frames rather than one lonely frame per hour.
+  # This schedule stays as a FALLBACK: if the Worker dies, publishing degrades
+  # to hourly instead of stopping.
+  #
+  # ⚠️ It fires EVERY hour regardless of whether the Worker is alive — cron
+  # cannot know. That was the bug. While a scheduled firing took the four-cycle
+  # batch it held the `render` concurrency group for ~47 of every 60 minutes,
+  # and because GitHub keeps only ONE pending run per group, the Worker's :30
+  # and :45 dispatches were cancelled while queued. Half the primary trigger's
+  # work was discarded every hour, invisibly: cadence stayed flat at 15 minutes
+  # because the batch published the very slots it had displaced, so every
+  # external check read healthy. Measured 2026-08-17 over 30 runs — the pattern
+  # repeated every hour without exception. The batch is gone (see CYCLES); a
+  # scheduled run is now one cycle, like any other.
   #
   # ⚠️ A dead Worker is therefore NOT loudly visible: hourly frames will not
   # trip the 2-hour staleness alarm. Before the loop depends on this cadence,
@@ -43,18 +52,26 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # The normal path is now ONE cycle: the Cloudflare trigger fires every 15
-  # minutes, so a run renders the newest slot and returns in ~3 minutes. That
-  # is also why a bad render is now visible almost immediately instead of after
-  # a whole batch has published with it.
+  # ONE cycle, always. The Cloudflare trigger fires every 15 minutes, so a run
+  # renders the newest slot and returns in ~3 minutes — which is also why a bad
+  # render surfaces immediately instead of after a whole batch has published
+  # with it.
   #
-  # Batching survives for the FALLBACK only. A `schedule` firing means the
-  # Worker is not calling — hourly — so four cycles at 14 minutes turn one
-  # lonely frame per hour into ~45 minutes of usable spread. Same expression as
-  # before; what changed is which branch is the exception.
-  CYCLES: ${{ github.event_name == 'schedule' && 4 || 1 }}
-  # Just under an upstream slot, so cycles track new captures rather than
-  # re-fetching one that has not changed.
+  # Batching used to survive for the fallback: `schedule` took four cycles, on
+  # the stated premise that "a scheduled firing means the Worker is not
+  # calling." That premise was false — cron fires on the hour whether or not
+  # the Worker is healthy — so the fallback ran every hour and displaced the
+  # primary trigger it exists to back up. See the schedule comment above.
+  #
+  # The trade, taken knowingly: if the Worker really does die, the fallback is
+  # now one frame per hour rather than ~45 minutes of spread. Thinner — but it
+  # is a fallback that costs nothing while the Worker is healthy, and a stalled
+  # Worker is detected within ~15 minutes by an external monitor that shares no
+  # failure domain with this repo.
+  CYCLES: 1
+  # Retained for the loop's sleep branch, which is unreachable while CYCLES is
+  # 1. Just under an upstream slot, so any future multi-cycle run tracks new
+  # captures rather than re-fetching one that has not changed.
   INTERVAL_SECONDS: 840
 
 jobs:
