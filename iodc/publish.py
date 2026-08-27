@@ -285,6 +285,15 @@ def history_from_meta(meta: dict) -> dict:
     return history
 
 
+#: How many trailing captures the spacing check judges.
+#:
+#: Three captures is two gaps - enough that an alternating stutter (15, 60, 15)
+#: still shows a bad pair, and few enough that a healed hole leaves the judged
+#: window within ~2 cycles instead of the ~3 hours the full retained window took.
+#: See the note inside capture_gaps for why trailing rather than total.
+RECENT_CAPTURES = 3
+
+
 @dataclass(frozen=True)
 class CadenceGap:
     """The widest hole in one product's retained capture times."""
@@ -300,7 +309,7 @@ class CadenceGap:
     captures: int
 
 
-def capture_gaps(history: dict) -> dict:
+def capture_gaps(history: dict, recent: int = RECENT_CAPTURES) -> dict:
     """`{product: CadenceGap}` — how evenly each product is actually publishing.
 
     Freshness and spacing are different failures and only one of them was being
@@ -322,10 +331,27 @@ def capture_gaps(history: dict) -> dict:
     """
     summaries = {}
     for product_key, views in history.items():
+        retained = {name: sorted(set(times)) for name, times in views.items()}
+        captures = max((len(t) for t in retained.values()), default=0)
+
+        # Judge only the TRAILING captures, not the whole retained history.
+        #
+        # A hole is permanent once it happens: no later cycle can fill it. Judging
+        # the full 12-frame window therefore re-reported the same healed gap on
+        # every run until it aged out - one 60-minute upstream hole on 2026-08-27
+        # produced ELEVEN consecutive red runs across 2.5 hours, while frames were
+        # publishing fresh throughout. An alarm about a past event that no future
+        # run can clear is unactionable, and it trains the reader to ignore a
+        # watchdog the app repo's health-check.yml check 20 also depends on.
+        #
+        # A trailing window keeps the signal this check exists for. The failure it
+        # was built to catch - the Worker dead, the hourly fallback still
+        # publishing - is a SUSTAINED condition: every fresh pair is ~60 min apart,
+        # so it fires on this run and the next and the next. Only a healed
+        # transient falls out, which is exactly the alarm worth losing.
         ordered_by_series = {
-            name: sorted(set(times)) for name, times in views.items()
+            name: ordered[-recent:] for name, ordered in retained.items()
         }
-        captures = max((len(t) for t in ordered_by_series.values()), default=0)
 
         worst = None
         for name, ordered in ordered_by_series.items():

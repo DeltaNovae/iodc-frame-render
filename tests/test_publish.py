@@ -343,6 +343,46 @@ def test_the_gap_names_the_capture_it_follows():
     assert gap.minutes == 60
 
 
+def test_a_healed_hole_leaves_the_judged_window_and_stops_firing():
+    """The 2026-08-27 incident, which is the reason spacing is judged on a
+    trailing window rather than the whole retained history.
+
+    One 60-minute upstream hole produced ELEVEN consecutive red runs across
+    2.5 hours: the hole sat inside the 12-frame window and failed every run
+    until it aged out, while frames published fresh throughout. The first and
+    last failing runs cited the identical hole, which is what a re-reported
+    event looks like from the outside.
+
+    A hole is permanent - no later cycle can fill it - so alarming on one that
+    has already healed is unactionable, and it trains the reader to ignore a
+    watchdog `health-check.yml` check 20 also depends on. Here the hole is the
+    FIRST gap and cadence has been healthy since; the check must be quiet."""
+    history = {"storm": product_history(0, 60, 75, 90, 105)}
+
+    gap = publish.capture_gaps(history)["storm"]
+
+    assert gap.minutes == 15
+    assert gap.minutes < 40
+    assert gap.captures == 5          # still reports everything retained
+
+
+def test_a_dead_trigger_still_fires_every_run_because_it_is_sustained():
+    """The failure the spacing check exists for, and the reason the trailing
+    window does not blunt it.
+
+    With the Cloudflare Worker dead, `render.yml`'s hourly `schedule` keeps
+    publishing, so the newest capture stays inside any age limit and freshness
+    sees nothing wrong. That state is SUSTAINED: every fresh pair is ~60 min
+    apart, so the alarm fires on this run and on the next one and the one
+    after - unlike a healed transient, which falls out within ~2 cycles."""
+    history = {"storm": product_history(0, 60, 120, 180)}
+
+    gap = publish.capture_gaps(history)["storm"]
+
+    assert gap.minutes == 60
+    assert gap.minutes > 40
+
+
 def test_the_worst_series_is_reported_not_the_first():
     """The four series should be identical, so one falling out of step is a
     real defect. Reporting the first series, or averaging them, would hide it
