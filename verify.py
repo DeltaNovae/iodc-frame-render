@@ -19,6 +19,14 @@ while passing the other:
   state a dead render trigger produces: the workflow's hourly fallback keeps
   frames fresh while the loop quietly turns to lurching.
 
+Spacing is judged on the TRAILING captures only, not the whole retained
+window. A hole is permanent once it happens — no later cycle can fill it — so
+judging all twelve frames re-reported the same healed gap on every run until
+it aged out: one 60-minute upstream hole on 2026-08-27 produced eleven
+consecutive red runs across 2.5 hours while frames published fresh throughout.
+The failure this check exists for is sustained rather than historical, so a
+trailing window keeps it and drops only the alarm nobody could act on.
+
 Usage:  python verify.py [--max-age-minutes 120] [--max-gap-minutes 40]
 """
 
@@ -141,7 +149,8 @@ def main() -> int:
         after = reference.after.strftime("%Y-%m-%dT%H:%M:%SZ")
         problems.append(
             f"{args.cadence_product} captures are {reference.minutes:.0f} min apart at "
-            f"worst (limit {args.max_gap_minutes:.0f}), the hole following {after} — "
+            f"worst (limit {args.max_gap_minutes:.0f}) across the last "
+            f"{publish.RECENT_CAPTURES} captures, the hole following {after} — "
             "frames are still fresh but the cadence has slipped, which is what a "
             "dead render trigger looks like from the outside"
         )
