@@ -226,7 +226,7 @@ def test_one_product_failing_leaves_the_others_published(cycle, failure):
 
     published = set(result["products"])
     assert "rain" not in published, "the injected failure did not take effect"
-    assert published == {"clouds", "storm", "fog"}, (
+    assert published == {"clouds", "storm", "fog", "thermal"}, (
         f"{type(failure).__name__} cost more than the product that raised it: "
         f"published {sorted(published)}"
     )
@@ -243,7 +243,7 @@ def test_an_overlay_mismatch_is_survivable(cycle):
 
     result = render.render_cycle(NIGHT_RUN)
 
-    assert set(result["products"]) == {"clouds", "rain", "fog"}
+    assert set(result["products"]) == {"clouds", "rain", "fog", "thermal"}
 
 
 def test_every_product_failing_still_raises(cycle):
@@ -300,7 +300,7 @@ def test_the_cycle_gives_every_frame_a_bare_source_that_is_not_the_composite(cyc
 
     result = render.render_cycle(NIGHT_RUN)
 
-    assert set(result["products"]) == {"clouds", "storm", "rain", "fog"}
+    assert set(result["products"]) == {"clouds", "storm", "rain", "fog", "thermal"}
     for product_key, payload in result["products"].items():
         for view_key, langs in payload["views"].items():
             for lang, view_payload in langs.items():

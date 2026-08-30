@@ -29,7 +29,8 @@ from datetime import datetime, timezone
 
 from PIL import Image
 
-from iodc import fog, overlays, products, publish, rain, sizes, storage, storm, validate, wms
+from iodc import (fog, overlays, products, publish, rain, sizes, storage, storm,
+                  thermal, validate, wms)
 from iodc.fetch import fetch_frame
 from iodc.views import VIEWS
 
@@ -100,9 +101,15 @@ def render_cycle(when: datetime, force: str | None = None,
         jobs = {"rain": [rain.RAIN]}
     elif force == "fog":
         jobs = {"fog": fog.ladder(decision_at)}
+    elif force == "thermal":
+        jobs = {"thermal": [thermal.THERMAL]}
     else:
         jobs = {"clouds": products.ladder(decision_at), "storm": [storm.STORM],
-                "rain": [rain.RAIN], "fog": fog.ladder(decision_at)}
+                "rain": [rain.RAIN], "fog": fog.ladder(decision_at),
+                # Not a tile — a base layer meant to be drawn under other map
+                # layers. Rides the ir108 fetch storm already makes, so it costs
+                # no upstream request. See iodc/thermal.py.
+                "thermal": [thermal.THERMAL]}
     # Both times are logged: when they diverge by more than a step, that gap is
     # the thing to look at first.
     log.info("cycle at %s, deciding for slot %s (%.0f min behind)",
@@ -244,6 +251,12 @@ def _tone(image, product):
     navy."""
     if product.key == "storm":
         return storm.recolor_storm(image)
+    # ⚠️ Before the is_night branch, and for the same reason storm is: thermal is
+    # built FROM the night layer, so is_night alone would paint it navy — and a
+    # toned frame silently breaks the grey-to-temperature correspondence that is
+    # this product's entire purpose. Untoned is not an omission here.
+    if product.key == "thermal":
+        return image
     if product.is_night:
         return products.recolor_night(image)
     if product.brighten:
