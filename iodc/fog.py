@@ -61,9 +61,9 @@ it.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageFilter
 
 from . import overlays, solar
 from .products import DECISION_POINT, Product
@@ -191,6 +191,64 @@ def ladder(when: datetime) -> list:
     return []
 
 
+#: The DAY side may only continue fog the NIGHT side saw; it may not create it.
+#:
+#: Found 2026-10-08 on a misty October morning (METARs: mist 1.4-2.5 km, no fog
+#: anywhere). Night frames painted 0% of the plain all night; the day recipe then
+#: painted 92% at 07:30, decaying to 20% by 08:30 as the sun climbed. Low sun
+#: through humid haze lifts the very reflectances the day test reads, so on the
+#: day side mist is indistinguishable from fog — and a 2 km mist drew as dense
+#: fog. Radiation fog forms overnight, where the night recipe sees it, so the
+#: last pre-dawn night frames are the seed. Plain-box, matched mornings:
+#:
+#:     day side            07:30   08:00   08:30
+#:     JAN fog   unseeded    83%     69%     42%
+#:               seeded      75%     67%     41%   <- the fog kept
+#:     FEB clear unseeded     3%      0%      0%
+#:               seeded       2%      0%      0%
+#:     OCT mist  unseeded    92%     60%     20%
+#:               seeded       0%      0%      0%   <- the false sheet gone
+#:
+#: Accepted cost: fog the night side could not see (hidden under high cloud
+#: before dawn, or forming after it) is not painted on the day side either.
+SEED_MAX_ELEVATION = -3.0   # night frames this close to dawn already fade (Jan: 60% -> 50% at -0.3 deg)
+SEED_SLOTS = 2              # a union, so one bad night frame cannot erase the seed
+#: Fog edges move a little between the last night frame and the day frame; 3 px
+#: kept ~95% of the January sheet while the clear morning stayed at 0-2%.
+SEED_GROW_PX = 3
+
+
+def seed_slots(captured_at: datetime, step: timedelta = timedelta(minutes=15)) -> list:
+    """The night slots that seed a day frame, newest first: the last
+    [SEED_SLOTS] before ``captured_at`` with the sun at or below
+    [SEED_MAX_ELEVATION]. For an afternoon frame that is the same morning's
+    pre-dawn — radiation fog does not form in daylight."""
+    out = []
+    t = captured_at
+    for _ in range(int(timedelta(days=1) / step)):
+        t -= step
+        if solar.solar_elevation(*DECISION_POINT, t) <= SEED_MAX_ELEVATION:
+            out.append(t)
+            if len(out) == SEED_SLOTS:
+                return out
+    raise RuntimeError(f"no night slot within a day of {captured_at.isoformat()}")
+
+
+def seed_mask(night_frames: list) -> Image.Image:
+    """Where the night recipe saw fog in any of ``night_frames``, grown by
+    [SEED_GROW_PX]: an "L" image, 255 inside the seed."""
+    seed = None
+    for frame in night_frames:
+        rgb = frame.convert("RGB")
+        mask = Image.new("L", rgb.size)
+        mask.putdata([255 if fog_intensity(*p, True) >= MIN_INTENSITY else 0
+                      for p in rgb.getdata()])
+        seed = mask if seed is None else ImageChops.lighter(seed, mask)
+    if seed is None:
+        raise ValueError("a seed needs at least one night frame")
+    return seed.filter(ImageFilter.MaxFilter(2 * SEED_GROW_PX + 1))
+
+
 def fog_intensity(r: int, g: int, b: int, night: bool) -> float:
     """0 = no fog signal, 1 = as dense as the scale goes.
 
@@ -222,19 +280,26 @@ def context_tone(b: int) -> int:
     return round(_CONTEXT_CEIL - (b / 255.0) * (_CONTEXT_CEIL - _CONTEXT_FLOOR))
 
 
-def compose(raw: Image.Image, view, night: bool) -> Image.Image:
+def compose(raw: Image.Image, view, night: bool, seed: Image.Image = None) -> Image.Image:
     """The sky in grey, with fog highlighted in cyan.
 
+    A day frame needs ``seed`` ([seed_mask]) and paints fog only inside it.
     Labels are added by the caller's per-language loop, above this.
     """
     frame = raw.convert("RGB")
+    if not night and (seed is None or seed.size != frame.size):
+        # No unseeded fallback: that is the false sheet the seed exists to stop.
+        raise ValueError("a day fog frame needs a night seed of the same size")
     src = frame.load()
+    allowed = None if night else seed.load()
     out = Image.new("RGB", frame.size)
     dst = out.load()
     for y in range(frame.height):
         for x in range(frame.width):
             r, g, b = src[x, y]
             intensity = fog_intensity(r, g, b, night)
+            if allowed is not None and not allowed[x, y]:
+                intensity = 0.0
             if intensity >= MIN_INTENSITY:
                 colour = _mix(_FOG_THIN, _FOG_DENSE, intensity)
                 dst[x, y] = colour

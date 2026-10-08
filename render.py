@@ -153,8 +153,12 @@ def render_cycle(when: datetime, force: str | None = None,
                     bare = rain.compose_bare(raw, view)
                     image = rain.add_lines(bare.copy(), view)
                 elif used.key == "fog":
+                    night = used.layer == fog.FOG_NIGHT.layer
+                    # A day frame paints only fog the night side saw (fog.seed_slots).
+                    seed = None if night else _fog_seed(caps, view, frame.captured_at,
+                                                        fetched)
                     image = fog.compose(Image.open(io.BytesIO(frame.raw)), view,
-                                        night=used.layer == "rgb_fog")
+                                        night=night, seed=seed)
                     bare = image
                 else:
                     image = Image.open(io.BytesIO(frame.raw)).convert("RGB")
@@ -262,6 +266,23 @@ def _tone(image, product):
     if product.brighten:
         return products.brighten(image)
     return image
+
+
+def _fog_seed(caps: bytes, view, captured_at, fetched: dict):
+    """The night mask a day fog frame is confined to, from the exact pre-dawn
+    slots (no walk-back: an older night is a different night). Any failure
+    raises, so the product skips the cycle and carry_forward keeps its last
+    good frame — never an unseeded day frame."""
+    dim = wms.parse_time_dimension(caps, fog.FOG_NIGHT.layer)
+    frames = []
+    for slot in fog.seed_slots(captured_at):
+        cache_key = ("fog-seed", view.key, slot)
+        if cache_key not in fetched:
+            fetched[cache_key] = fetch_frame(
+                fog.FOG_NIGHT.layer, view, dim, ladder=1, before=slot,
+                fmt=fog.FOG_NIGHT.wms_format)
+        frames.append(Image.open(io.BytesIO(fetched[cache_key].raw)))
+    return fog.seed_mask(frames)
 
 
 def _fetch_down_the_ladder(caps: bytes, rungs: list, view, before=None,

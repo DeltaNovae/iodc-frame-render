@@ -188,7 +188,7 @@ def cycle(monkeypatch):
     monkeypatch.setattr(render.rain, "compose_bare", lambda raw, view: _FakeImage())
     monkeypatch.setattr(render.rain, "add_lines", lambda image, view: image)
     monkeypatch.setattr(render.fog, "compose",
-                        lambda raw, view, night: _FakeImage())
+                        lambda raw, view, night, seed=None: _FakeImage())
     monkeypatch.setattr(render.overlays, "languages", lambda: ["bn"])
     monkeypatch.setattr(render.overlays, "load", lambda *a, **k: _FakeImage())
     monkeypatch.setattr(render.overlays, "load_light_labels",
@@ -319,3 +319,43 @@ def test_the_cycle_gives_every_frame_a_bare_source_that_is_not_the_composite(cyc
                     f"{where} never pasted the overlay onto the composited "
                     f"frame — the harness is not exercising the real path"
                 )
+
+
+# ── the day fog frame fetches its night seed ─────────────────────────────────
+
+def test_fog_seed_fetches_the_exact_night_slots(monkeypatch):
+    from PIL import Image
+    from iodc.views import CLOSE
+    import io as _io
+    frame_at = datetime(2026, 1, 7, 2, 0, tzinfo=timezone.utc)
+    dim = wms.TimeDimension("rgb_fog", frame_at - timedelta(days=1), frame_at,
+                            timedelta(minutes=15), frame_at)
+    monkeypatch.setattr(render.wms, "parse_time_dimension", lambda *a, **k: dim)
+    buf = _io.BytesIO()
+    Image.new("RGB", CLOSE.size, (182, 105, 200)).save(buf, "PNG")
+    calls = []
+
+    def fake_fetch(layer, view, time_dim, ladder=None, before=None, fmt=None, **k):
+        calls.append((layer, ladder, before))
+        return type("F", (), {"raw": buf.getvalue()})()
+
+    monkeypatch.setattr(render, "fetch_frame", fake_fetch)
+    fetched = {}
+    seed = render._fog_seed(b"<caps/>", CLOSE, frame_at, fetched)
+    assert seed.size == CLOSE.size
+    assert calls == [("rgb_fog", 1, s) for s in fog.seed_slots(frame_at)]
+    render._fog_seed(b"<caps/>", CLOSE, frame_at, fetched)
+    assert len(calls) == 2                     # cached within the cycle
+
+
+def test_a_failed_seed_fetch_raises_so_the_product_skips(monkeypatch):
+    from iodc.views import CLOSE
+    frame_at = datetime(2026, 1, 7, 2, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(render.wms, "parse_time_dimension", lambda *a, **k: None)
+
+    def boom(*a, **k):
+        raise RuntimeError("rgb_fog/close: every slot failed")
+
+    monkeypatch.setattr(render, "fetch_frame", boom)
+    with pytest.raises(RuntimeError):
+        render._fog_seed(b"<caps/>", CLOSE, frame_at, {})

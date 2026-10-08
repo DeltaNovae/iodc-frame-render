@@ -229,3 +229,73 @@ def test_gate_sits_below_real_fog_reflectance():
 def test_gate_boundary(r, expected_fog):
     got = fog.fog_intensity(r, FOG_DAY_G, 172, night=False) > 0.0
     assert got is expected_fog
+
+
+# ── the night seed: day may continue fog, never create it ────────────────────
+# Regression for 2026-10-08: a misty October morning (no fog at any airport)
+# that the night side correctly left empty, then the day side painted 92%.
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+FOG_DAWN_FRAME = datetime(2026, 1, 7, 2, 0, tzinfo=timezone.utc)   # 08:00 BST
+
+
+def test_seed_is_the_last_two_night_slots_before_the_frame():
+    slots = fog.seed_slots(FOG_DAWN_FRAME)
+    assert len(slots) == fog.SEED_SLOTS == 2
+    assert slots[0] - slots[1] == timedelta(minutes=15)       # newest first
+    for slot in slots:
+        assert solar.solar_elevation(*DECISION_POINT, slot) <= fog.SEED_MAX_ELEVATION
+    # ...and they are the LAST such slots: the next one is already too bright.
+    after = slots[0] + timedelta(minutes=15)
+    assert solar.solar_elevation(*DECISION_POINT, after) > fog.SEED_MAX_ELEVATION
+
+
+def test_an_afternoon_frame_is_seeded_by_the_same_mornings_predawn():
+    afternoon = datetime(2026, 1, 7, 8, 0, tzinfo=timezone.utc)   # 14:00 BST
+    assert fog.seed_slots(afternoon) == fog.seed_slots(FOG_DAWN_FRAME)
+
+
+def _night_frame(fog_at=()):
+    img = solid(night_px(CLEAR_NIGHT_G))
+    for xy in fog_at:
+        img.putpixel(xy, night_px(DENSE_FOG_G))
+    return img
+
+
+def test_seed_is_the_union_of_its_frames_grown_by_the_margin():
+    seed = fog.seed_mask([_night_frame([(100, 100)]), _night_frame([(300, 300)])])
+    assert seed.getpixel((100, 100)) and seed.getpixel((300, 300))   # union
+    edge = 100 + fog.SEED_GROW_PX
+    assert seed.getpixel((edge, 100))                                # grown
+    assert not seed.getpixel((edge + 1, 100))                        # but no further
+    assert not seed.getpixel((200, 200))
+
+
+def test_day_fog_outside_the_seed_is_not_painted():
+    """The October morning: day pixels that pass every day test, an empty night."""
+    seed = fog.seed_mask([_night_frame()])
+    out = fog.compose(solid(day_px(FOG_DAY_G)), CLOSE, night=False, seed=seed)
+    r, g, b = out.getpixel((320, 320))
+    assert r == g == b                         # grey sky, no fog claimed
+
+
+def test_day_fog_inside_the_seed_is_still_painted():
+    """The January morning: fog the night side saw survives into daylight."""
+    seed = fog.seed_mask([_night_frame([(320, 320)])])
+    out = fog.compose(solid(day_px(FOG_DAY_G)), CLOSE, night=False, seed=seed)
+    r, g, b = out.getpixel((320, 320))
+    assert b > r + 40 and g > r + 40           # cyan
+    r, g, b = out.getpixel((10, 10))
+    assert r == g == b                         # outside it, grey
+
+
+def test_a_day_frame_without_a_seed_refuses_rather_than_paint_unseeded():
+    with pytest.raises(ValueError):
+        fog.compose(solid(day_px(FOG_DAY_G)), CLOSE, night=False)
+
+
+def test_night_frames_need_no_seed():
+    out = fog.compose(solid(night_px(DENSE_FOG_G)), CLOSE, night=True)
+    r, g, b = out.getpixel((320, 320))
+    assert b > r + 40
