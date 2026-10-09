@@ -285,6 +285,28 @@ def history_from_meta(meta: dict) -> dict:
     return history
 
 
+def oldest_capture(meta: dict, keep=lambda key: True):
+    """Oldest current `capturedAtUtc` across the views of the products `keep`
+    accepts, or None. Mirrors `worker/scripts/lib/sat_freshness.mjs` in the app
+    repo (health-check check 20): change one, change both.
+
+    Not `generatedAtUtc`: that is the oldest of EVERYTHING, so fog's planned
+    sunrise/sunset pause pushed it past the 90-min limit on 2026-10-09 while
+    every other product was current. Callers judge fog apart, on a looser limit.
+    """
+    times = []
+    for product_key, product in (meta.get("products") or {}).items():
+        if not keep(product_key):
+            continue
+        for view in (product.get("views") or {}).values():
+            try:
+                times.append(datetime.strptime(view["capturedAtUtc"], "%Y-%m-%dT%H:%M:%SZ")
+                             .replace(tzinfo=timezone.utc))
+            except (ValueError, KeyError, TypeError):
+                continue
+    return min(times) if times else None
+
+
 #: How many trailing captures the spacing check judges.
 #:
 #: Three captures is two gaps - enough that an alternating stutter (15, 60, 15)

@@ -437,3 +437,27 @@ def test_fog_declining_the_blind_band_is_why_storm_is_the_judged_product():
 
     assert gaps["storm"].minutes == 15
     assert gaps["fog"].minutes == 45
+
+
+# ── oldest_capture ────────────────────────────────────────────────────────────
+
+def _meta_at(**products):
+    return {"products": {k: {"views": {f"v{i}": {"capturedAtUtc": s} for i, s in enumerate(stamps)}}
+                         for k, stamps in products.items()}}
+
+
+def test_oldest_capture_leaves_fogs_planned_pause_out():
+    """The 2026-10-09 12:00Z false alarm: fog paused at 10:30 for sunset while
+    the rest were at 11:30."""
+    meta = _meta_at(storm=["2026-10-09T11:30:00Z"], rain=["2026-10-09T11:15:00Z"],
+                    fog=["2026-10-09T10:30:00Z"])
+    assert publish.oldest_capture(meta, lambda k: k != "fog") == \
+        datetime(2026, 10, 9, 11, 15, tzinfo=timezone.utc)
+    assert publish.oldest_capture(meta, lambda k: k == "fog") == \
+        datetime(2026, 10, 9, 10, 30, tzinfo=timezone.utc)
+
+
+def test_oldest_capture_none_when_nothing_accepted():
+    meta = _meta_at(fog=["2026-10-09T10:30:00Z"], storm=["bad"])
+    assert publish.oldest_capture(meta, lambda k: k != "fog") is None
+    assert publish.oldest_capture({}) is None

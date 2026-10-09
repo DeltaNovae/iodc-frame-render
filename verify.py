@@ -56,12 +56,19 @@ CADENCE_PRODUCT = "storm"
 MAX_GAP_MINUTES = 40
 
 #: The app's own "old image" label: we hear of a stall no later than users see it.
+#: Judged on the non-fog products — the same rule as the app caption (B013).
 MAX_AGE_MINUTES = 90
+
+#: Fog alone: above its longest planned sunrise/sunset pause (~106 min seen at
+#: dusk 2026-10-09), so it fires only when fog itself is stuck.
+MAX_FOG_AGE_MINUTES = 150
+FOG = "fog"
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--max-age-minutes", type=int, default=MAX_AGE_MINUTES)
+    ap.add_argument("--max-fog-age-minutes", type=int, default=MAX_FOG_AGE_MINUTES)
     ap.add_argument("--max-gap-minutes", type=float, default=MAX_GAP_MINUTES)
     ap.add_argument("--cadence-product", default=CADENCE_PRODUCT)
     ap.add_argument("--check-trigger", action="store_true",
@@ -78,11 +85,16 @@ def main() -> int:
         print("FAIL: nothing published yet — meta.json is absent")
         return 1
 
-    captured = datetime.strptime(meta["generatedAtUtc"], "%Y-%m-%dT%H:%M:%SZ") \
-        .replace(tzinfo=timezone.utc)
-    age = (datetime.now(timezone.utc) - captured).total_seconds() / 60
+    now = datetime.now(timezone.utc)
+    users = publish.oldest_capture(meta, lambda key: key != FOG)
+    fog_at = publish.oldest_capture(meta, lambda key: key == FOG)
+    age = None if users is None else (now - users).total_seconds() / 60
+    fog_age = None if fog_at is None else (now - fog_at).total_seconds() / 60
 
-    print(f"captured    : {meta['generatedAtUtc']}  ({age:.0f} min ago)")
+    print(f"captured    : {users:%Y-%m-%dT%H:%M:%SZ}  ({age:.0f} min ago, oldest non-fog)"
+          if users else "captured    : no non-fog capture named")
+    if fog_at:
+        print(f"fog         : {fog_at:%Y-%m-%dT%H:%M:%SZ}  ({fog_age:.0f} min ago)")
     print(f"attribution : {meta['attribution']}")
     print(f"version     : {meta.get('version')}")
 
@@ -113,10 +125,17 @@ def main() -> int:
             print(f"  {name:<10} {' · '.join(report):<36} "
                   f"{len(view.get('frames', []))} frame(s) retained")
 
-    if age > args.max_age_minutes:
+    if age is None:
+        problems.append("meta names no non-fog capture — freshness unjudged")
+    elif age > args.max_age_minutes:
         problems.append(
-            f"newest capture is {age:.0f} min old (limit {args.max_age_minutes}) — "
+            f"oldest non-fog capture is {age:.0f} min old (limit {args.max_age_minutes}) — "
             "the pipeline is stalled while still serving its last good frames"
+        )
+    if fog_age is not None and fog_age > args.max_fog_age_minutes:
+        problems.append(
+            f"fog capture is {fog_age:.0f} min old (limit {args.max_fog_age_minutes}, above "
+            "its sunrise/sunset pause) — fog is stuck while the others are fresh"
         )
 
     # Spacing. Printed for every product; the reference one gets a note.
