@@ -9,25 +9,22 @@ Doubles as the staleness probe the health check needs: a pipeline that dies
 quietly keeps serving its last good frames, so *nothing looks broken* — only
 the age of the newest capture reveals it.
 
-It checks two independent properties, because a pipeline can fail either one
+It judges two independent properties, because a pipeline can fail either one
 while passing the other:
 
 * **Freshness** — is the newest capture recent? Catches a pipeline that has
-  stopped entirely.
-* **Spacing** — are captures evenly separated? Catches a pipeline that is still
-  publishing but has lost its cadence, which age cannot see at all. This is the
-  state a dead render trigger produces: the workflow's hourly fallback keeps
-  frames fresh while the loop quietly turns to lurching.
+  stopped, or runs but publishes nothing.
+* **Trigger** (`--check-trigger`) — is the Cloudflare cron still dispatching
+  render.yml? A dead trigger leaves the hourly fallback keeping frames fresh
+  while the loop turns to lurching, which age cannot see at all.
 
-Spacing is judged on the TRAILING captures only, not the whole retained
-window. A hole is permanent once it happens — no later cycle can fill it — so
-judging all twelve frames re-reported the same healed gap on every run until
-it aged out: one 60-minute upstream hole on 2026-08-27 produced eleven
-consecutive red runs across 2.5 hours while frames published fresh throughout.
-The failure this check exists for is sustained rather than historical, so a
-trailing window keeps it and drops only the alarm nobody could act on.
+**Spacing** — are captures evenly separated? — is printed as the record, on
+the trailing captures only, but no longer fails (2026-10-09). It was the
+trigger's proxy, and an upstream EUMETSAT hole breaks it identically:
+2026-10-05..07 paged three times while the trigger fired every 15 minutes.
+See `iodc/trigger.py`.
 
-Usage:  python verify.py [--max-age-minutes 120] [--max-gap-minutes 40]
+Usage:  python verify.py [--max-age-minutes 90] [--max-gap-minutes 40] [--check-trigger]
 """
 
 from __future__ import annotations
@@ -37,15 +34,14 @@ import json
 import sys
 from datetime import datetime, timezone
 
-from iodc import publish, storage
+from iodc import publish, storage, trigger
 
 
-#: Which product's spacing is allowed to fail the check.
+#: Which product's spacing is reported as the reference.
 #:
 #: `storm` is the only product with no conditional path: it rides `ir108`
 #: directly, 24 hours a day, with no instrument ladder and no washed-out guard,
-#: so every cycle either publishes it or the cycle itself failed. A gap in storm
-#: is therefore always a pipeline gap.
+#: so every cycle either publishes it or found no new upstream slot.
 #:
 #: The others cannot carry this. `fog` deliberately DECLINES through the blind
 #: band at sunrise and sunset — `carry_forward` freezes its entry and the series
@@ -55,22 +51,21 @@ from iodc import publish, storage
 #: layer. All three are still reported, because the report is also the record.
 CADENCE_PRODUCT = "storm"
 
-#: Minutes between consecutive captures before spacing counts as broken.
-#:
-#: The grid is 15 minutes. One skipped slot (30 min) is deliberately tolerated:
-#: `render.yml` logs a failed cycle and carries on by design, and the previous
-#: frames keep serving. Two skipped slots (45 min) is where a loop visibly
-#: lurches, and it is also where the hourly fallback's raggedness starts to
-#: show. The limit sits between them, so the alarm fires on the second miss and
-#: not the first.
+#: Minutes between captures above which the report names a gap. The grid is
+#: 15; two skipped slots (45) is where a loop visibly lurches. Reported only.
 MAX_GAP_MINUTES = 40
+
+#: The app's own "old image" label: we hear of a stall no later than users see it.
+MAX_AGE_MINUTES = 90
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--max-age-minutes", type=int, default=120)
+    ap.add_argument("--max-age-minutes", type=int, default=MAX_AGE_MINUTES)
     ap.add_argument("--max-gap-minutes", type=float, default=MAX_GAP_MINUTES)
     ap.add_argument("--cadence-product", default=CADENCE_PRODUCT)
+    ap.add_argument("--check-trigger", action="store_true",
+                    help="fail when the Cloudflare cron has stopped dispatching render.yml")
     args = ap.parse_args()
 
     target = publish.Target.from_env()
@@ -124,14 +119,14 @@ def main() -> int:
             "the pipeline is stalled while still serving its last good frames"
         )
 
-    # Spacing. Printed for every product, judged on one — see CADENCE_PRODUCT.
+    # Spacing. Printed for every product; the reference one gets a note.
     # Because retention is 12 captures, each run reads the last ~3 hours, so
     # running this hourly accumulates a continuous record of the cadence rather
     # than a snapshot of it.
     print()
     gaps = publish.capture_gaps(publish.history_from_meta(meta))
     for product_key, gap in sorted(gaps.items()):
-        judged = " ← judged" if product_key == args.cadence_product else ""
+        judged = " ← reference" if product_key == args.cadence_product else ""
         if gap.minutes is None:
             print(f"cadence     : {product_key:<7} {gap.captures} capture(s) — "
                   f"nothing to measure yet{judged}")
@@ -140,20 +135,25 @@ def main() -> int:
                   f"over {gap.captures:>2} captures  ({gap.series}){judged}")
 
     reference = gaps.get(args.cadence_product)
-    if reference is None:
-        problems.append(
-            f"'{args.cadence_product}' is the cadence reference but meta does not "
-            "name it — spacing went unjudged"
-        )
-    elif reference.minutes is not None and reference.minutes > args.max_gap_minutes:
+    if reference and reference.minutes is not None and reference.minutes > args.max_gap_minutes:
         after = reference.after.strftime("%Y-%m-%dT%H:%M:%SZ")
-        problems.append(
-            f"{args.cadence_product} captures are {reference.minutes:.0f} min apart at "
-            f"worst (limit {args.max_gap_minutes:.0f}) across the last "
-            f"{publish.RECENT_CAPTURES} captures, the hole following {after} — "
-            "frames are still fresh but the cadence has slipped, which is what a "
-            "dead render trigger looks like from the outside"
-        )
+        print(f"note        : {args.cadence_product} gap of {reference.minutes:.0f} min after "
+              f"{after} — upstream skipped slots, unless the trigger check fails")
+
+    if args.check_trigger:
+        try:
+            age = trigger.newest_dispatch_age_minutes(
+                trigger.fetch_runs(), datetime.now(timezone.utc))
+        except Exception as e:  # any failure leaves the trigger unjudged — say so
+            problems.append(f"render trigger unjudged — GitHub API: {e}")
+        else:
+            shown = "none listed" if age is None else f"{age:.0f} min ago"
+            print(f"trigger     : newest dispatched render run {shown}")
+            if age is None or age > trigger.MAX_AGE_MINUTES:
+                problems.append(
+                    f"newest dispatched render run {shown} (limit {trigger.MAX_AGE_MINUTES}) — "
+                    "the Cloudflare cron satellite-render-trigger is not firing; only the "
+                    "hourly fallback is rendering")
 
     if problems:
         print("\nFAIL")
