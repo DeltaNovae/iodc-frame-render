@@ -149,7 +149,9 @@ def test_every_product_has_strips_for_both_views():
         for product in ("clouds", "storm", "rain", "fog"):
             strip = overlays.load_strip(view, product, "bn")
             assert strip.width == view.width
-            assert strip.height < 40      # a band, not a banner
+            # A band, not a banner: ≤ 1/10 of the frame. Raised from < 40 px when
+            # the words grew to be readable on a phone (2026-10-10).
+            assert strip.height <= view.height // 10
 
 
 def test_language_independent_strips_serve_any_language():
