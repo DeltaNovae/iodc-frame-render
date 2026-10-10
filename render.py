@@ -354,6 +354,7 @@ def publish_cycle(result: dict, client, target: publish.Target) -> dict:
     for product_key, payload in result["products"].items():
         entries = {}
         product_overlays = {}
+        product_legends = {}
         for view_key, langs in payload["views"].items():
             for lang, view_payload in langs.items():
                 captured_at = view_payload["captured_at"]
@@ -376,9 +377,23 @@ def publish_cycle(result: dict, client, target: publish.Target) -> dict:
                                           publish.overlay_digest(body))
                 overlay_bodies[key] = body
                 product_overlays[(view_key, lang)] = key
+
+                # The legend for a playing loop. A product with no strip
+                # (thermal) or an unreadable one simply names none: the legend
+                # is polish, and losing the cycle over it would invert the
+                # priorities — the `_stamp` rule.
+                try:
+                    body = overlays.publishable_legend(VIEWS[view_key], product_key, lang)
+                except (FileNotFoundError, overlays.OverlayMismatch):
+                    continue
+                key = publish.legend_key(target.prefix, view_key, lang, product_key,
+                                         publish.overlay_digest(body))
+                overlay_bodies[key] = body
+                product_legends[(view_key, lang)] = key
         to_publish[product_key] = {"product": payload["product"],
                                    "entries": entries,
-                                   "overlays": product_overlays}
+                                   "overlays": product_overlays,
+                                   "legends": product_legends}
 
     # Before the pointer that names them — the frames' rule, for the same
     # reason. And re-put every cycle rather than skipping keys the previous

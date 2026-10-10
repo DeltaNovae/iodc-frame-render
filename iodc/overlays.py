@@ -127,6 +127,18 @@ def load_strip(view, product: str, lang: str) -> Image.Image:
     raise FileNotFoundError(f"no strip for view={view.key} product={product} lang={lang}")
 
 
+def publishable_legend(view, product: str, lang: str) -> bytes:
+    """The legend strip a READER draws above a playing loop, as PNG bytes —
+    the same strip `render._stamp` bakes into the full still, so play and pause
+    show identical pixels. Raises FileNotFoundError for a product with no strip
+    (thermal). Palette-quantized for `publishable`'s reasons (deterministic, so
+    the content-hashed key stays stable across cycles)."""
+    buffer = io.BytesIO()
+    load_strip(view, product, lang).quantize(colors=256, method=Image.FASTOCTREE).save(
+        buffer, format="PNG", optimize=True)
+    return buffer.getvalue()
+
+
 def publishable(view, lang: str, variant: str) -> bytes:
     """The overlay a READER composites, as PNG bytes.
 

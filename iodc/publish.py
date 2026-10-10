@@ -97,6 +97,15 @@ def overlay_key(prefix: str, view: str, lang: str, variant: str,
     return f"{prefix}/overlays/{view}-{lang}-{variant}-{digest}.png"
 
 
+def legend_key(prefix: str, view: str, lang: str, product: str,
+               digest: str) -> str:
+    """`sat/legends/close-bn-storm-1a2b3c4d.png` — the legend strip a reader
+    draws above a PLAYING loop (2026-10-10). The strip is baked only into the
+    full still, so the imagery-only loop frames played with no legend at all.
+    Content-hashed for the overlay's reasons."""
+    return f"{prefix}/legends/{view}-{lang}-{product}-{digest}.png"
+
+
 def overlay_digest(body: bytes) -> str:
     """Eight hex characters of SHA-256 — enough that a collision between the
     handful of overlays this pipeline publishes is not a real risk, short
@@ -140,6 +149,8 @@ def build_meta(prefix: str, products: dict, history: dict) -> dict:
         entries = payload["entries"]
         views = {}
         overlays = payload.get("overlays") or {}
+        # Additive like `overlay`, and for the same reason needs no v3.
+        legends = payload.get("legends") or {}
         for (view_key, lang), captured_at in entries.items():
             name = f"{view_key}-{lang}"
             times = sorted(
@@ -151,6 +162,8 @@ def build_meta(prefix: str, products: dict, history: dict) -> dict:
                 # field, and a null would have to be special-cased separately.
                 **({"overlay": overlays[(view_key, lang)]}
                    if (view_key, lang) in overlays else {}),
+                **({"legend": legends[(view_key, lang)]}
+                   if (view_key, lang) in legends else {}),
                 "latest": _sizes_for(prefix, product_key, view_key, lang, captured_at),
                 "frames": [
                     dict(capturedAtUtc=_iso(t),
