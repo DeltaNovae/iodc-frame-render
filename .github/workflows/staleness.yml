@@ -92,9 +92,11 @@ jobs:
             try { detail = '```\n' + fs.readFileSync('check.txt', 'utf8').trim() + '\n```'; } catch (e) {}
 
             const body = [
-              'One of three things is wrong: the newest published capture is older',
-              'than the staleness limit, a frame named by `meta.json` is missing, or',
-              'the Cloudflare render trigger has stopped dispatching `render.yml`.',
+              'One of four things is wrong: the pipeline stopped publishing while',
+              'EUMETSAT offered newer frames, a frame named by `meta.json` is missing,',
+              'the Cloudflare render trigger has stopped dispatching `render.yml`, or',
+              'EUMETSAT itself has been late for over 3 hours (upstream, nothing to fix).',
+              'A shorter upstream delay is printed in the log and pages nothing.',
               '',
               'Readers are still being served the last good frames, so nothing looks',
               'broken from the outside — which is exactly why this check exists.',

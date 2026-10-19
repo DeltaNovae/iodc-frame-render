@@ -320,6 +320,61 @@ def oldest_capture(meta: dict, keep=lambda key: True):
     return min(times) if times else None
 
 
+# ── Whose lateness is it? ─────────────────────────────────────────────────────
+#
+# An old capture has two causes that look identical by age alone: our pipeline
+# stopped, or EUMETSAT published late. 2026-10-19 was the second — upstream ran
+# 75–105 min behind for eight hours, every cycle published the newest slot that
+# existed, and the age alarm paged ~37 times for nothing we could fix. Each
+# cycle therefore stamps `cycleAtUtc` (our heartbeat) and `upstreamLatestUtc`
+# (the newest slot upstream offered) into the pointer, and the verdict reads
+# both. Mirrors `classifyFreshness` in the app repo's
+# `worker/scripts/lib/sat_freshness.mjs`: change one, change both.
+
+FRESH = "fresh"
+UPSTREAM_LATE = "upstream-late"            # reported, not paged
+UPSTREAM_VERY_LATE = "upstream-very-late"  # paged: users see hours-old imagery
+NOT_PUBLISHING = "not-publishing"          # paged: our heartbeat stopped
+STALLED = "stalled"                        # paged: upstream had newer, we did not publish it
+
+#: Three missed 15-minute cycles. Above this the pipeline itself has stopped
+#: writing the pointer — or cannot reach EUMETSAT at all.
+HEARTBEAT_MAX_MINUTES = 60
+#: Rain's layer lands a slot after IR, so the oldest product trailing the
+#: newest upstream slot by one slot is normal. Two slots of slack.
+UPSTREAM_SLACK_MINUTES = 30
+#: Upstream lateness pages past this anyway: nothing to fix, but users have
+#: looked at an hours-old image and the owner should know.
+UPSTREAM_PAGE_MINUTES = 180
+
+
+def _parse(stamp):
+    try:
+        return datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
+def classify_freshness(meta: dict, oldest: datetime, now: datetime,
+                       max_age_minutes: float) -> str:
+    """Verdict for the oldest non-fog capture. A pointer without the cycle
+    stamps (written before they existed, or by a pinned run) falls back to the
+    age-only rule, so an old pointer can never turn a real stall into silence."""
+    if (now - oldest).total_seconds() / 60 <= max_age_minutes:
+        return FRESH
+    cycle_at = _parse(meta.get("cycleAtUtc"))
+    upstream = _parse(meta.get("upstreamLatestUtc"))
+    if cycle_at is None or upstream is None:
+        return STALLED
+    if (now - cycle_at).total_seconds() / 60 > HEARTBEAT_MAX_MINUTES:
+        return NOT_PUBLISHING
+    if (upstream - oldest).total_seconds() / 60 > UPSTREAM_SLACK_MINUTES:
+        return STALLED
+    if (now - oldest).total_seconds() / 60 > UPSTREAM_PAGE_MINUTES:
+        return UPSTREAM_VERY_LATE
+    return UPSTREAM_LATE
+
+
 #: How many trailing captures the spacing check judges.
 #:
 #: Three captures is two gaps - enough that an alternating stutter (15, 60, 15)

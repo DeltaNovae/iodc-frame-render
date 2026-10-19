@@ -228,6 +228,11 @@ def render_cycle(when: datetime, force: str | None = None,
         results["products"][key] = {"product": used, "views": views}
     if not results["products"]:
         raise RuntimeError("every product failed this cycle")
+    # The heartbeat pair `publish.classify_freshness` reads. A pinned run names
+    # a past instant, so it stamps nothing and the pointer falls back to age-only.
+    if not pinned:
+        results["cycle_at"] = when
+        results["upstream_latest"] = decision_at
     return results
 
 
@@ -408,6 +413,10 @@ def publish_cycle(result: dict, client, target: publish.Target) -> dict:
 
     meta = publish.carry_forward(
         publish.build_meta(target.prefix, to_publish, history), previous)
+    # Additive, like `overlay`: readers that do not know the fields ignore them.
+    if result.get("upstream_latest"):
+        meta["cycleAtUtc"] = wms.format_iso(result["cycle_at"])
+        meta["upstreamLatestUtc"] = wms.format_iso(result["upstream_latest"])
     client.put(publish.meta_key(target.prefix),
                json.dumps(meta, indent=2).encode("utf-8"),
                "application/json", publish.META_CACHE_CONTROL)

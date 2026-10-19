@@ -24,7 +24,7 @@ trigger's proxy, and an upstream EUMETSAT hole breaks it identically:
 2026-10-05..07 paged three times while the trigger fired every 15 minutes.
 See `iodc/trigger.py`.
 
-Usage:  python verify.py [--max-age-minutes 90] [--max-gap-minutes 40] [--check-trigger]
+Usage:  python verify.py [--max-age-minutes 90] [--max-gap-minutes 40] [--check-trigger] [--skip-age]
 """
 
 from __future__ import annotations
@@ -73,6 +73,10 @@ def main() -> int:
     ap.add_argument("--cadence-product", default=CADENCE_PRODUCT)
     ap.add_argument("--check-trigger", action="store_true",
                     help="fail when the Cloudflare cron has stopped dispatching render.yml")
+    ap.add_argument("--skip-age", action="store_true",
+                    help="judge integrity only — render.yml's per-cycle read-back. Age is "
+                         "staleness.yml's and the app repo health check's: judged after every "
+                         "15-minute cycle it emailed up to 96 times a day for one upstream delay")
     args = ap.parse_args()
 
     target = publish.Target.from_env()
@@ -125,14 +129,34 @@ def main() -> int:
             print(f"  {name:<10} {' · '.join(report):<36} "
                   f"{len(view.get('frames', []))} frame(s) retained")
 
-    if age is None:
+    print(f"heartbeat   : cycle {meta.get('cycleAtUtc', 'unstamped')} · "
+          f"upstream newest {meta.get('upstreamLatestUtc', 'unstamped')}")
+    if args.skip_age:
+        pass
+    elif age is None:
         problems.append("meta names no non-fog capture — freshness unjudged")
-    elif age > args.max_age_minutes:
-        problems.append(
-            f"oldest non-fog capture is {age:.0f} min old (limit {args.max_age_minutes}) — "
-            "the pipeline is stalled while still serving its last good frames"
-        )
-    if fog_age is not None and fog_age > args.max_fog_age_minutes:
+    else:
+        verdict = publish.classify_freshness(meta, users, now, args.max_age_minutes)
+        limit = f"{age:.0f} min old (limit {args.max_age_minutes})"
+        if verdict == publish.UPSTREAM_LATE:
+            print(f"note        : oldest non-fog capture {limit} — EUMETSAT is late; every "
+                  f"cycle published the newest slot it offered. Not paged below "
+                  f"{publish.UPSTREAM_PAGE_MINUTES} min.")
+        elif verdict == publish.UPSTREAM_VERY_LATE:
+            problems.append(
+                f"oldest non-fog capture {limit} — EUMETSAT has been late past "
+                f"{publish.UPSTREAM_PAGE_MINUTES} min. Upstream, nothing to fix here; "
+                "users are seeing an hours-old image")
+        elif verdict == publish.NOT_PUBLISHING:
+            problems.append(
+                f"oldest non-fog capture {limit} and no cycle has written the pointer for "
+                f"over {publish.HEARTBEAT_MAX_MINUTES} min — render is failing every cycle "
+                "or cannot reach EUMETSAT; read the render runs")
+        elif verdict == publish.STALLED:
+            problems.append(
+                f"oldest non-fog capture {limit} while upstream offers newer — "
+                "the pipeline is stalled while still serving its last good frames")
+    if not args.skip_age and fog_age is not None and fog_age > args.max_fog_age_minutes:
         problems.append(
             f"fog capture is {fog_age:.0f} min old (limit {args.max_fog_age_minutes}, above "
             "its sunrise/sunset pause) — fog is stuck while the others are fresh"
