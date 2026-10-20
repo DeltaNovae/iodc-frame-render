@@ -16,6 +16,7 @@ Why the TIME dimension is handled explicitly rather than left to the server:
 from __future__ import annotations
 
 import math
+import re
 import time as _time
 import urllib.error
 import urllib.request
@@ -173,17 +174,21 @@ def build_getmap_url(layer: str, view, when: datetime, base_url: str = WMS_BASE,
 
 
 def http_get(url: str, timeout: int = 90, attempts: int = 3, backoff: float = 2.0,
-             sleep=_time.sleep) -> bytes:
+             sleep=_time.sleep, check=None) -> bytes:
     """GET with a small retry ladder for transient upstream failures.
 
     A 4xx is not retried — a malformed request will fail identically however
-    many times it is repeated.
+    many times it is repeated. Neither is a `check` rejection: `check(headers)`
+    runs on each response and raises to refuse it, and the same request would
+    get the same answer.
     """
     last_error = None
     for attempt in range(attempts):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if check is not None:
+                    check(getattr(resp, "headers", None) or {})
                 return resp.read()
         except urllib.error.HTTPError as exc:
             if 400 <= exc.code < 500:
@@ -194,3 +199,45 @@ def http_get(url: str, timeout: int = 90, attempts: int = 3, backoff: float = 2.
         if attempt < attempts - 1:
             sleep(backoff * (2 ** attempt))
     raise RuntimeError(f"upstream fetch failed after {attempts} attempts: {last_error}")
+
+
+# ── A frame must be the slot it was asked for ─────────────────────────────────
+#
+# Asked for a slot it does not have, the service may answer 200 with a valid
+# image of a DIFFERENT slot, saying so only in a header — seen 2026-10-20 for
+# rgb_fog 2026-10-16T23:45Z, which EUMETSAT never published:
+#
+#     Warning: 99 Nearest value used: time=2026-10-16T23:30:00.000Z ISO8601 (msg_iodc:rgb_fog)
+#
+# Accepted, that frame would be published under the slot we asked for: an older
+# image claiming to be newer, under an immutable key phones cache for good, and
+# nothing downstream could tell. The header also arrives on EXACT matches (the
+# same warning naming 23:30 for a 23:30 request), so the times are compared;
+# its mere presence means nothing. On 2026-10-17 the same request had returned
+# an error instead, so neither behaviour can be relied on.
+
+_WARNED_TIME = re.compile(r"time=(\S+?)(?:\s|$)")
+
+
+class SubstitutedFrame(ValueError):
+    """The service answered with a different slot than the one requested."""
+
+
+def check_slot(requested: datetime):
+    """A `http_get` check refusing a response whose Warning names another slot."""
+    def check(headers) -> None:
+        warning = headers.get("Warning") or ""
+        match = _WARNED_TIME.search(warning)
+        if match is None:
+            return
+        served = parse_iso(match.group(1))
+        if served != requested:
+            raise SubstitutedFrame(
+                f"asked for {format_iso(requested)}, served {format_iso(served)} "
+                f"(upstream has no such slot)")
+    return check
+
+
+def get_frame(url: str, requested: datetime) -> bytes:
+    """`http_get` for one GetMap frame, refusing a substituted slot."""
+    return http_get(url, check=check_slot(requested))

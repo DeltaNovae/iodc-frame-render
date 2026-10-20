@@ -88,3 +88,73 @@ def test_a_wrong_sized_frame_is_rejected_rather_than_composited():
     with pytest.raises(RuntimeError, match="no usable frame"):
         fetch_frame("ir108", WIDE, DIM, ladder=2,
                     getter=lambda url: good_jpeg(size=(100, 100)))
+
+
+# ── A frame must be the slot it was asked for (2026-10-20) ────────────────────
+
+class _Response:
+    def __init__(self, body, warning=None):
+        self._body = body
+        self.headers = {"Warning": warning} if warning else {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self._body
+
+
+def _warning(served: datetime) -> str:
+    stamp = served.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    return f"99 Nearest value used: time={stamp} ISO8601 (msg_iodc:ir108)"
+
+
+def test_a_substituted_slot_is_refused_and_the_walk_back_finds_the_real_one(monkeypatch):
+    """The live case: asked for a slot upstream does not have, the service
+    answers 200 with the previous slot's image and says so only in Warning.
+    Accepted, that image would publish under the newer time. Refused, the
+    ladder steps back to the slot that really exists."""
+    import urllib.request
+    newest = DIM.latest
+    previous = newest - DIM.step
+    asked = []
+
+    def fake_urlopen(req, timeout=None):
+        when = wms.parse_iso(req.full_url.split("TIME=")[1])
+        asked.append(when)
+        # Upstream has no `newest`; it serves `previous` for both requests,
+        # naming the time it really served — as observed.
+        return _Response(good_jpeg(), _warning(previous))
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    frame = fetch_frame("ir108", WIDE, DIM)
+    assert frame.captured_at == previous
+    assert asked == [newest, previous], "a substitution must not be retried"
+
+
+def test_the_warning_on_an_exact_match_is_not_a_substitution(monkeypatch):
+    """The service sends the same Warning when the slot exists (23:30 for a
+    23:30 request) — so the guard compares times, never mere presence."""
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda req, timeout=None: _Response(good_jpeg(), _warning(DIM.latest)))
+    assert fetch_frame("ir108", WIDE, DIM).captured_at == DIM.latest
+
+
+def test_no_warning_is_accepted_as_before(monkeypatch):
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda req, timeout=None: _Response(good_jpeg()))
+    assert fetch_frame("ir108", WIDE, DIM).captured_at == DIM.latest
+
+
+def test_check_slot_names_both_times():
+    asked = datetime(2026, 10, 16, 23, 45, tzinfo=timezone.utc)
+    check = wms.check_slot(asked)
+    with pytest.raises(wms.SubstitutedFrame, match="asked for 2026-10-16T23:45:00Z, served 2026-10-16T23:30:00Z"):
+        check({"Warning": "99 Nearest value used: time=2026-10-16T23:30:00.000Z ISO8601 (msg_iodc:rgb_fog)"})
+    check({"Warning": "99 Nearest value used: time=2026-10-16T23:45:00.000Z ISO8601 (msg_iodc:rgb_fog)"})
+    check({})

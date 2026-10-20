@@ -359,3 +359,46 @@ def test_a_failed_seed_fetch_raises_so_the_product_skips(monkeypatch):
     monkeypatch.setattr(render, "fetch_frame", boom)
     with pytest.raises(RuntimeError):
         render._fog_seed(b"<caps/>", CLOSE, frame_at, {})
+
+
+def test_one_missing_seed_slot_seeds_from_the_other(monkeypatch):
+    """2026-10-17: EUMETSAT never published rgb_fog 23:45Z. The seed raised on
+    it every cycle and day fog stayed dark all day, while 23:30Z was usable.
+    The union has to survive one missing slot — and be built from the slot
+    that arrived, not from nothing."""
+    from PIL import Image
+    from iodc.views import CLOSE
+    import io as _io
+    frame_at = datetime(2026, 1, 7, 2, 0, tzinfo=timezone.utc)
+    newest, older = fog.seed_slots(frame_at)
+    monkeypatch.setattr(render.wms, "parse_time_dimension", lambda *a, **k: None)
+    from .test_fog import DENSE_FOG_G, night_px
+    foggy = _io.BytesIO()
+    Image.new("RGB", CLOSE.size, night_px(DENSE_FOG_G)).save(foggy, "PNG")
+
+    def fake_fetch(layer, view, time_dim, ladder=None, before=None, fmt=None, **k):
+        if before == newest:
+            raise RuntimeError("rgb_fog/close: implausibly small response (468 bytes < 8000)")
+        return type("F", (), {"raw": foggy.getvalue()})()
+
+    monkeypatch.setattr(render, "fetch_frame", fake_fetch)
+    seed = render._fog_seed(b"<caps/>", CLOSE, frame_at, {})
+    expected = fog.seed_mask([Image.open(_io.BytesIO(foggy.getvalue()))])
+    assert seed.size == CLOSE.size
+    assert list(seed.getdata()) == list(expected.getdata())
+    assert seed.getextrema() == (255, 255), "the surviving slot's fog was lost"
+
+
+def test_every_seed_slot_missing_still_raises_and_names_them(monkeypatch):
+    from iodc.views import CLOSE
+    frame_at = datetime(2026, 1, 7, 2, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(render.wms, "parse_time_dimension", lambda *a, **k: None)
+
+    def boom(*a, before=None, **k):
+        raise RuntimeError("gone")
+
+    monkeypatch.setattr(render, "fetch_frame", boom)
+    with pytest.raises(RuntimeError, match="no fog seed slot usable for close") as exc:
+        render._fog_seed(b"<caps/>", CLOSE, frame_at, {})
+    for slot in fog.seed_slots(frame_at):
+        assert wms.format_iso(slot) in str(exc.value)

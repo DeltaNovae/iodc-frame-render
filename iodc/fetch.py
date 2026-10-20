@@ -35,7 +35,7 @@ class Frame:
 
 
 def fetch_frame(layer: str, view, time_dim: wms.TimeDimension,
-                ladder: int = DEFAULT_LADDER, getter=wms.http_get,
+                ladder: int = DEFAULT_LADDER, getter=None,
                 before=None, max_mean=None, max_clipped=None,
                 fmt: str = "image/jpeg", transparent: bool = False,
                 lenient: bool = False) -> Frame:
@@ -59,7 +59,10 @@ def fetch_frame(layer: str, view, time_dim: wms.TimeDimension,
         url = wms.build_getmap_url(layer, view, when, fmt=fmt,
                                    transparent=transparent)
         try:
-            raw = getter(url)
+            # The default refuses a substituted slot (`wms.get_frame`); that
+            # rejection walks back like any failed slot. Injected getters
+            # (tests) take the URL alone.
+            raw = getter(url) if getter else wms.get_frame(url, when)
         except Exception as exc:  # network/HTTP failure for this slot
             log.warning("%s/%s @ %s: fetch failed: %s", layer, view.key,
                         wms.format_iso(when), exc)

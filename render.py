@@ -275,18 +275,32 @@ def _tone(image, product):
 
 def _fog_seed(caps: bytes, view, captured_at, fetched: dict):
     """The night mask a day fog frame is confined to, from the exact pre-dawn
-    slots (no walk-back: an older night is a different night). Any failure
-    raises, so the product skips the cycle and carry_forward keeps its last
-    good frame — never an unseeded day frame."""
+    slots (no walk-back: an older night is a different night).
+
+    The seed is a union of whichever slots arrive: one missing slot must not
+    erase it. On 2026-10-17 EUMETSAT never published rgb_fog 23:45Z, this
+    raised on it every cycle, and day fog stayed dark from sunrise to dusk
+    while 23:30Z sat there usable. Only when NO slot arrives does it raise, so
+    the product skips the cycle and carry_forward keeps its last good frame —
+    never an unseeded day frame."""
     dim = wms.parse_time_dimension(caps, fog.FOG_NIGHT.layer)
     frames = []
+    problems = []
     for slot in fog.seed_slots(captured_at):
         cache_key = ("fog-seed", view.key, slot)
         if cache_key not in fetched:
-            fetched[cache_key] = fetch_frame(
-                fog.FOG_NIGHT.layer, view, dim, ladder=1, before=slot,
-                fmt=fog.FOG_NIGHT.wms_format)
+            try:
+                fetched[cache_key] = fetch_frame(
+                    fog.FOG_NIGHT.layer, view, dim, ladder=1, before=slot,
+                    fmt=fog.FOG_NIGHT.wms_format)
+            except RuntimeError as exc:
+                problems.append(f"{wms.format_iso(slot)}: {exc}")
+                log.warning("fog seed slot %s unusable for %s — seeding from the rest",
+                            wms.format_iso(slot), view.key)
+                continue
         frames.append(Image.open(io.BytesIO(fetched[cache_key].raw)))
+    if not frames:
+        raise RuntimeError(f"no fog seed slot usable for {view.key}: " + "; ".join(problems))
     return fog.seed_mask(frames)
 
 
