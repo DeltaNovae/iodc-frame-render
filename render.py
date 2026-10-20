@@ -233,7 +233,26 @@ def render_cycle(when: datetime, force: str | None = None,
     if not pinned:
         results["cycle_at"] = when
         results["upstream_latest"] = decision_at
+        results["upstream_by_layer"] = _upstream_by_layer(caps, jobs)
     return results
+
+
+def _upstream_by_layer(caps, jobs) -> dict:
+    """Newest advertised slot of every layer this cycle could use.
+
+    Layers do not advance together: on 2026-10-20, catching up from a 3-h
+    outage, rain's h63 ran 75 min behind ir108, and judging rain against the
+    ir108 decision slot paged "our pipeline stalled" for an image EUMETSAT did
+    not yet have. `publish.classify_freshness` judges each product against its
+    own layer from these.
+    """
+    latest = {}
+    for layer in {rung.layer for rungs in jobs.values() for rung in rungs}:
+        try:
+            latest[layer] = wms.parse_time_dimension(caps, layer).latest
+        except ValueError:
+            continue
+    return latest
 
 
 def _stamp(image, view, product_key: str, lang: str):
@@ -431,6 +450,10 @@ def publish_cycle(result: dict, client, target: publish.Target) -> dict:
     if result.get("upstream_latest"):
         meta["cycleAtUtc"] = wms.format_iso(result["cycle_at"])
         meta["upstreamLatestUtc"] = wms.format_iso(result["upstream_latest"])
+    if result.get("upstream_by_layer"):
+        meta["upstreamLatestByLayer"] = {
+            layer: wms.format_iso(at)
+            for layer, at in sorted(result["upstream_by_layer"].items())}
     client.put(publish.meta_key(target.prefix),
                json.dumps(meta, indent=2).encode("utf-8"),
                "application/json", publish.META_CACHE_CONTROL)

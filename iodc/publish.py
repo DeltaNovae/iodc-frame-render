@@ -327,8 +327,8 @@ def oldest_capture(meta: dict, keep=lambda key: True):
 # 75–105 min behind for eight hours, every cycle published the newest slot that
 # existed, and the age alarm paged ~37 times for nothing we could fix. Each
 # cycle therefore stamps `cycleAtUtc` (our heartbeat) and `upstreamLatestUtc`
-# (the newest slot upstream offered) into the pointer, and the verdict reads
-# both. Mirrors `classifyFreshness` in the app repo's
+# (the newest slot upstream offered) into the pointer — per layer too, in
+# `upstreamLatestByLayer` (2026-10-20) — and the verdict reads them. Mirrors `classifyFreshness` in the app repo's
 # `worker/scripts/lib/sat_freshness.mjs`: change one, change both.
 
 FRESH = "fresh"
@@ -355,6 +355,27 @@ def _parse(stamp):
         return None
 
 
+def _trails_own_layer(meta: dict, by_layer: dict, fallback: datetime) -> bool:
+    """Does a non-fog product trail the newest slot of ITS OWN layer by more
+    than the slack — upstream had the frame and we did not publish it?
+
+    Not one upstream slot for everything: layers do not advance together. On
+    2026-10-20 rain's h63 ran 75 min behind ir108 while catching up from a 3-h
+    outage, and comparing rain against ir108 paged "our pipeline stalled" for an
+    image EUMETSAT did not yet have. A layer without a stamp (a carried-forward
+    product on a rung this cycle did not consider) uses `upstreamLatestUtc`.
+    """
+    for key, product in (meta.get("products") or {}).items():
+        if key == "fog":
+            continue
+        ref = _parse(by_layer.get(product.get("layer"))) or fallback
+        for view in (product.get("views") or {}).values():
+            captured = _parse(view.get("capturedAtUtc"))
+            if captured and (ref - captured).total_seconds() / 60 > UPSTREAM_SLACK_MINUTES:
+                return True
+    return False
+
+
 def classify_freshness(meta: dict, oldest: datetime, now: datetime,
                        max_age_minutes: float) -> str:
     """Verdict for the oldest non-fog capture. A pointer without the cycle
@@ -368,7 +389,9 @@ def classify_freshness(meta: dict, oldest: datetime, now: datetime,
         return STALLED
     if (now - cycle_at).total_seconds() / 60 > HEARTBEAT_MAX_MINUTES:
         return NOT_PUBLISHING
-    if (upstream - oldest).total_seconds() / 60 > UPSTREAM_SLACK_MINUTES:
+    by_layer = meta.get("upstreamLatestByLayer")
+    if (_trails_own_layer(meta, by_layer, upstream) if by_layer
+            else (upstream - oldest).total_seconds() / 60 > UPSTREAM_SLACK_MINUTES):
         return STALLED
     if (now - oldest).total_seconds() / 60 > UPSTREAM_PAGE_MINUTES:
         return UPSTREAM_VERY_LATE
