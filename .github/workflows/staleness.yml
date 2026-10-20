@@ -91,7 +91,21 @@ jobs:
             let detail = '_check output unavailable — see the workflow logs._';
             try { detail = '```\n' + fs.readFileSync('check.txt', 'utf8').trim() + '\n```'; } catch (e) {}
 
+            // Edited in place while the alarm holds, never commented on: a comment
+            // is an email, and an hourly one buried the issues that mattered
+            // (2026-10-19, app repo OPERATIONS.md § 14.8). Opening and the
+            // recovery comment remain the only emails.
+            const existing = await github.rest.issues.listForRepo({
+              ...context.repo, state: 'open', labels: 'staleness',
+            });
+            const open = existing.data[0];
+            const now = new Date().toISOString();
+            const since = (open?.body || '').match(/<!-- since: (\S+) -->/)?.[1] ?? now;
+
             const body = [
+              `<!-- since: ${since} -->`,
+              `**Failing since ${since}** · last seen ${now} · edited each hour, no email until it recovers.`,
+              '',
               'One of four things is wrong: the pipeline stopped publishing while',
               'EUMETSAT offered newer frames, a frame named by `meta.json` is missing,',
               'the Cloudflare render trigger has stopped dispatching `render.yml`, or',
@@ -110,12 +124,9 @@ jobs:
               `Run: ${runUrl}`,
             ].join('\n');
 
-            const existing = await github.rest.issues.listForRepo({
-              ...context.repo, state: 'open', labels: 'staleness',
-            });
-            if (existing.data.length) {
-              await github.rest.issues.createComment({
-                ...context.repo, issue_number: existing.data[0].number, body,
+            if (open) {
+              await github.rest.issues.update({
+                ...context.repo, issue_number: open.number, body,
               });
             } else {
               await github.rest.issues.create({
