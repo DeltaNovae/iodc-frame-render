@@ -192,7 +192,11 @@ def main() -> int:
         else:
             shown = "none listed" if age is None else f"{age:.0f} min ago"
             print(f"trigger     : newest dispatched render run {shown}")
-            if age is None or age > trigger.MAX_AGE_MINUTES:
+            judged = trigger.verdict(age)
+            if judged == trigger.UNJUDGED:
+                print("note        : GitHub listed no dispatched run — its API, not a dead "
+                      "trigger (a dead one's runs stay listed and age); unjudged this run")
+            elif judged == trigger.STOPPED:
                 problems.append(
                     f"newest dispatched render run {shown} (limit {trigger.MAX_AGE_MINUTES}) — "
                     "the Cloudflare cron satellite-render-trigger is not firing; only the "

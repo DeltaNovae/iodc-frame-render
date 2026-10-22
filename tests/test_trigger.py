@@ -29,6 +29,16 @@ def test_none_when_no_dispatched_run_is_listed():
     assert trigger.newest_dispatch_age_minutes(None, NOW) is None
 
 
+def test_an_empty_list_is_unjudged_not_a_dead_trigger():
+    """2026-10-22: GitHub's API listed no runs while the trigger fired every 15 min."""
+    assert trigger.verdict(trigger.newest_dispatch_age_minutes([], NOW)) == trigger.UNJUDGED
+
+
+def test_a_dead_trigger_still_ages_into_stopped():
+    assert trigger.verdict(trigger.newest_dispatch_age_minutes([run(70)], NOW)) == trigger.STOPPED
+    assert trigger.verdict(trigger.newest_dispatch_age_minutes([run(10)], NOW)) == trigger.FIRING
+
+
 def test_skips_unparseable_timestamps():
     runs = [{"event": "workflow_dispatch", "created_at": "bad"},
             {"event": "workflow_dispatch"}, run(12)]

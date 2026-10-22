@@ -39,6 +39,25 @@ def newest_dispatch_age_minutes(runs: list, now: datetime) -> float | None:
     return (now - max(times)).total_seconds() / 60
 
 
+FIRING = "firing"
+STOPPED = "stopped"
+UNJUDGED = "unjudged"
+
+
+def verdict(age_minutes: float | None) -> str:
+    """Firing, stopped, or unjudged when no dispatched run is listed.
+
+    An empty list cannot be a dead trigger: the query asks for dispatched runs
+    only, and a dead trigger's old ones stay listed and age past the limit. It
+    is GitHub failing to list — on 2026-10-22, during GitHub's "Incident with
+    Actions Results", the API answered 200 with no runs while the trigger
+    dispatched every 15 minutes, and both monitors paged a dead trigger.
+    """
+    if age_minutes is None:
+        return UNJUDGED
+    return STOPPED if age_minutes > MAX_AGE_MINUTES else FIRING
+
+
 def fetch_runs(timeout: float = 15) -> list:
     """render.yml's recent dispatched runs. The repo is public; GITHUB_TOKEN,
     when set, only lifts the anonymous rate limit."""
